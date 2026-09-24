@@ -213,6 +213,9 @@ The driver can write every loop packet to a JSON file, for example to feed a liv
 script. The file is replaced each time, typically every `poll_interval` seconds. It is written to a
 temporary file and then renamed, so a reader never sees a half-written file.
 
+> Leave this option off if you use a skin or extension that writes its own live JSON data, such as
+> weewx-DivumWX or weewx-loopdata. They already provide the live data their pages need.
+
 ```ini
 [EcowittGateway]
     [[loop_json]]

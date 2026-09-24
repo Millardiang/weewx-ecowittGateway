@@ -101,6 +101,12 @@ Publish each loop packet to an MQTT broker? (y/n) [n]: y
   already in the map are offered. See the README's *Sensor mapping* section.
 - **ecwLoop.json:** optional. Writes every loop packet to a JSON file for live web pages or
   scripts, in the location and units you choose. See the README for details.
+
+  > **Note:** if you use a skin or extension that writes its own live JSON data, such as
+  > weewx-DivumWX or weewx-loopdata, answer **n** to this question. Those extensions already
+  > provide the live data their pages need, so a second JSON file only adds disk writes and could
+  > be confused with theirs. To turn it off later, set `enable = False` under
+  > `[EcowittGateway] [[loop_json]]` in `weewx.conf` and restart WeeWX.
 - **MQTT:** optional. Publishes every loop packet to an MQTT broker. The installer checks the
   broker can be reached, and the password isn't shown as you type it. This needs the `paho-mqtt`
   package: `sudo apt install python3-paho-mqtt` (Debian) or `pip install paho-mqtt` (pip, with the

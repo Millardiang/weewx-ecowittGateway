@@ -22,10 +22,13 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 0.0.1 beta
+Version: 0.0.1 beta 3
 
-Install in the WeeWX user directory and reference it from weewx.conf:
-    [EcowittHttp]
+Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
+reference it from weewx.conf:
+    [Station]
+        station_type = EcowittGateway
+    [EcowittGateway]
         driver = user.weewx-EcowittGateway
 
 Supported sensors: WN20, WN31, WN32(P), WN34, WN35, WN38, WH40, WH41/43,
@@ -76,12 +79,31 @@ def timestamp_to_string(ts):
     return f"{time.strftime('%d %B %Y %H:%M:%S %Z', time.localtime(ts))} ({int(ts)})"
 
 
-DRIVER_NAME = 'EcowittHttp'
-DRIVER_VERSION = '0.0.1b1'
+DRIVER_NAME = 'EcowittGateway'
+LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
+DRIVER_VERSION = '0.0.1b3'
 DRIVER_MODULE = 'weewx-EcowittGateway'
-WEEWX_MAJOR = int(weewx.__version__.split('.')[0])
-if WEEWX_MAJOR < 4:
-    raise weewx.UnsupportedFeature(f'weewx 4 or higher is required, found {weewx.__version__}')
+MIN_WEEWX_VERSION = (5, 4, 0)
+
+
+def _version_tuple(version):
+    """'5.4.0', '5.5.2b1' -> (5, 4, 0), (5, 5, 2)"""
+    return tuple(int(re.match(r'\d+', part).group()) if re.match(r'\d+', part) else 0
+                 for part in version.split('.')[:3])
+
+
+if _version_tuple(weewx.__version__) < MIN_WEEWX_VERSION:
+    raise weewx.UnsupportedFeature(f"WeeWX {'.'.join(map(str, MIN_WEEWX_VERSION))} or later is required, "
+                                   f"found {weewx.__version__}")
+
+
+def driver_config(config_dict):
+    """The driver's section of weewx.conf, falling back to legacy section names."""
+    for name in (DRIVER_NAME, *LEGACY_SECTIONS):
+        if name in config_dict:
+            return config_dict[name]
+    return {}
+
 
 SUPPORTED_DEVICES = ('GW1100', 'GW1200', 'GW2000', 'GW3000', 'WN1700', 'WN1820', 'WN1821',
                      'WN1920', 'WN1980', 'WS6210', 'WS3800', 'WS3820', 'WS3900', 'WS3910')
@@ -685,8 +707,8 @@ class EcowittCommon:
         self.url_timeout = to_int(ec_config.get('url_timeout', DEFAULT_URL_TIMEOUT))
         self.ip_address = ec_config.get('ip_address')
         self.poll_interval = int(ec_config.get('poll_interval', DEFAULT_POLL_INTERVAL))
-        self.api_key = ec_config.get('api_key')
-        self.app_key = ec_config.get('app_key')
+        self.api_key = ec_config.get('api_key') or None
+        self.app_key = ec_config.get('app_key') or None
         self.mac = ec_config.get('mac')
         define_units()
         log.info('     device IP address is %s', self.ip_address)
@@ -768,7 +790,7 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
     """WeeWX service that augments loop packets with Ecowitt device data."""
 
     def __init__(self, engine, config_dict):
-        svc_config = config_dict.get('EcowittHttpService', config_dict.get('EcowittHttp', {}))
+        svc_config = config_dict.get('EcowittHttpService') or driver_config(config_dict)
         log.info('EcowittHttpService: version is %s', DRIVER_VERSION)
         self.unit_system = DEFAULT_UNIT_SYSTEM
         try:
@@ -861,7 +883,7 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
 
 
 def loader(config_dict, engine):
-    return EcowittHttpDriver(**config_dict[DRIVER_NAME])
+    return EcowittHttpDriver(**driver_config(config_dict))
 
 
 def configurator_loader(config_dict):
@@ -888,6 +910,9 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
         log.info('catchup source: %s', self.catchup_source)
         self.catchup_grace = weeutil.weeutil.to_int(catchup.get('grace', DEFAULT_CATCHUP_GRACE))
         self.catchup_retries = weeutil.weeutil.to_int(catchup.get('retries', DEFAULT_CATCHUP_RETRIES))
+        self.rain_source = str(stn_dict.get('rain_source', 'tipping')).lower()
+        log.info("WeeWX 'rain' and 'rainRate' are taken from the %s gauge",
+                 'piezo' if self.rain_source == 'piezo' else 'tipping')
         self.rain_a, self.piezo_a, self.lightning_a = self._trackers('Archive: ')
         self.collector.startup()
 
@@ -902,11 +927,13 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
                 packet = {'dateTime': data['datetime'] if 'datetime' in data else int(time.time() + 0.5),
                           'usUnits': self.unit_system}
                 self.process_live_data(data, packet)
-                packet['rain'] = packet['t_rain'] = self.rain.delta
+                packet['t_rain'] = self.rain.delta
                 packet['hail'] = packet['p_rain'] = self.piezo.delta
+                packet['rain'] = self.piezo.delta if self.rain_source == 'piezo' else self.rain.delta
                 mapped = self.mapper.map_data(data)
                 self.log_data(f'EcowittHttpDriver: Loop Mapped {self.model} data', mapped)
                 packet.update(mapped)
+                self.use_piezo_rate(data, packet)
                 self.log_data('EcowittHttpDriver: Loop Packet', packet, self.driver_debug.loop or weewx.debug >= 2)
                 yield packet
             elif isinstance(data, BaseException):
@@ -951,8 +978,9 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
                                                      * (1 - hum / 100), 2) * 10
                 except (KeyError, TypeError, ValueError, ZeroDivisionError, OverflowError):
                     pass
-            rec['rain'] = rec['t_rain'] = rain
+            rec['t_rain'] = rain
             rec['hail'] = rec['p_rain'] = piezo
+            rec['rain'] = piezo if self.rain_source == 'piezo' else rain
             if 'piezoRain.0x13.voltage' in rec:
                 key = 'ws85' if 'ws85.version' in rec else 'ws90'
                 rec[f'{key}_batt'] = rec['piezoRain.0x13.voltage']
@@ -960,7 +988,13 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
             if self.driver_debug.archive:
                 log.info('Archive rec data %s', rec)
             record.update(self.mapper.map_data(rec))
+            self.use_piezo_rate(rec, record)
             yield record
+
+    def use_piezo_rate(self, data, packet):
+        """Take rainRate from the piezo gauge when rain_source = piezo."""
+        if self.rain_source == 'piezo' and 'piezoRain.0x0E.val' in data:
+            packet['rainRate'] = data['piezoRain.0x0E.val']
 
     def catchup_factory(self):
         source = (self.catchup_source or 'either').lower()
@@ -1024,8 +1058,8 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
     @property
     def default_stanza(self):
         return f"""
-    [EcowittHttp]
-        # This section is for the Ecowitt local HTTP API driver.
+    [{DRIVER_NAME}]
+        # This section is for the weewx-EcowittGateway driver.
 
         # the driver to use
         driver = user.{DRIVER_MODULE}
@@ -1092,7 +1126,7 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
     @staticmethod
     def do_rain(config_dict):
         cls = EcowittHttpDriverConfEditor
-        drv_config = config_dict.get('EcowittHttp', {})
+        drv_config = config_dict.get(DRIVER_NAME, {})
         mapper = HttpMapper(**drv_config)
         try:
             paired = EcowittDevice(ip_address=drv_config.get('ip_address')).paired_rain_gauges
@@ -1142,9 +1176,8 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
             f"gauge. Set to {choices} or 'none' to not populate the WeeWX rain fields."),
             curr_type, possible).lower()
         if user_type in ('tipping', 'piezo'):
-            src_fields, rain_field, rate_field, other = {
-                'tipping': (cls.t_src_fields, 'rain', 'rain.0x0E.val', 'p_rain'),
-                'piezo': (cls.p_src_fields, 'p_rain', 'piezoRain.0x0E.val', 'rain')}[user_type]
+            src_fields, rain_field, other = {'tipping': (cls.t_src_fields, 'rain', 'p_rain'),
+                                             'piezo': (cls.p_src_fields, 'p_rain', 'rain')}[user_type]
             fields = [mapper.field_map.inverse[f] for f in src_fields if f in mapper.field_map.inverse]
             default_source = (curr_w_src if curr_type == user_type and curr_w_src is not None
                               else (fields[0] if fields else None))
@@ -1154,20 +1187,23 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
             weecfg.prompt_with_options(cls._wrap(
                 "Select the WeeWX observation to be used to derive WeeWX observation 'rain'. "
                 f"Possible observations are {' or '.join(fields)}."), default_source, options or None)
-            cls._merge(config_dict, f"""
+            cls._merge(config_dict, """
                 [StdWXCalculate]
                     [[Calculations]]
-                        rain = prefer_hardware
-                [EcowittHttp]
-                    [[field_map_extensions]]
-                        rainRate = {rate_field}""")
+                        rain = prefer_hardware""")
+            config_dict.setdefault(DRIVER_NAME, {})['rain_source'] = user_type
+            drop_rain_rate()
             if add_back is not None and paired_gauges == 'both':
                 cls._merge(config_dict, f"""
                     [StdWXCalculate]
                         [[Calculations]]
                             {add_back} = prefer_hardware""")
-            for section in ('Delta', 'Calculations'):
-                config_dict['StdWXCalculate'].get(section, {}).pop(rain_field, None)
+            # the driver supplies per-packet rain, so WeeWX must not derive it from a running total
+            delta = config_dict['StdWXCalculate'].get('Delta', {})
+            for field in ('rain', rain_field):
+                delta.pop(field, None)
+            if 'Delta' in config_dict['StdWXCalculate'] and not delta:
+                config_dict['StdWXCalculate'].pop('Delta')
         else:
             if curr_type in ('tipping', 'piezo'):
                 g = curr_type[0]
@@ -1266,7 +1302,7 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
             print(f"debug level is '{weewx.debug:d}'")
         weeutil.logger.setup('weewx', config_dict)
         define_units()
-        DirectEcowittDevice(options, parser, config_dict.get('EcowittHttp', {})).process_options()
+        DirectEcowittDevice(options, parser, driver_config(config_dict)).process_options()
 
 
 # ---------------------------------------------------------------------------
@@ -3269,14 +3305,14 @@ class DirectEcowittDevice:
                 driver.closePort()
 
     def engine_config(self):
-        service = f"{'user.' if WEEWX_MAJOR < 5 else ''}{DRIVER_MODULE}.EcowittHttpService"
+        service = f'{DRIVER_MODULE}.EcowittHttpService'
         config = {'Station': {'station_type': 'Simulator', 'altitude': [0, 'meter'], 'latitude': 0, 'longitude': 0},
                   'Simulator': {'driver': 'weewx.drivers.simulator', 'mode': 'simulator'},
-                  'EcowittHttp': {'ip_address': self.ip_address},
+                  DRIVER_NAME: {'ip_address': self.ip_address},
                   'Engine': {'Services': {'archive_services': service, 'report_services': 'weewx.engine.StdPrint'}}}
         for opt, key in (('poll_interval', 'poll_interval'), ('max_tries', 'max_tries'), ('retry_wait', 'retry_wait')):
             if self.opt(opt):
-                config['EcowittHttp'][key] = self.opt(opt)
+                config[DRIVER_NAME][key] = self.opt(opt)
         return config
 
     def run_service(self, action):
@@ -3474,7 +3510,7 @@ def main():
         print(f'debug level is {weewx.debug:d}')
     weeutil.logger.setup('ecowitt_http', config_dict)
     define_units()
-    DirectEcowittDevice(namespace, parser, config_dict.get('EcowittHttp', {})).process_options()
+    DirectEcowittDevice(namespace, parser, driver_config(config_dict)).process_options()
 
 
 if __name__ == '__main__':

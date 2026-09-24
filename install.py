@@ -26,10 +26,13 @@ to [EcowittGateway]. When run without a terminal (for example from a script)
 it uses the defaults or the existing settings.
 """
 
+import getpass
+import importlib.util
 import io
 import json
 import os
 import re
+import socket
 import sys
 import urllib.request
 
@@ -38,7 +41,7 @@ import weewx
 
 from weecfg.extension import ExtensionInstaller
 
-VERSION = '0.0.1b5'
+VERSION = '0.0.1b6'
 MODULE = 'weewx-EcowittGateway'
 SECTION = 'EcowittGateway'
 LEGACY_SECTION = 'EcowittHttp'
@@ -115,6 +118,26 @@ DRIVER_CONFIG = f"""
         path = ecwLoop.json
         # units in the file: native (as in the loop packet), us, metric or metricwx
         units = native
+
+    # publish each loop packet to an MQTT broker (needs the paho-mqtt package)
+    [[mqtt]]
+        enable = False
+        host = localhost
+        port = 1883
+        username = ""
+        password = ""
+        # messages go to <topic>/loop (json) and/or <topic>/<field> (individual)
+        topic = weewx/ecowitt
+        # json, individual or both
+        format = json
+        # native, us, metric or metricwx
+        units = native
+        qos = 0
+        retain = False
+        # set tls = True for an encrypted connection (usually port 8883);
+        # ca_certs is only needed for a private certificate authority
+        tls = False
+        ca_certs = ""
 """
 
 TIPPING_MODELS = ('wh40', 'wh69', 'wn20')
@@ -295,6 +318,7 @@ class EcowittGatewayInstaller(ExtensionInstaller):
         loop_on_init = mode != 'driver' or self._ask_yes(
             'Keep retrying at startup if the gateway cannot be reached (loop_on_init)?', True)
         loop_json = self._ask_loop_json(config_dict, existing.get('loop_json', {}), out)
+        mqtt = self._ask_mqtt(existing.get('mqtt', {}), out)
 
         if getattr(engine, 'dry_run', False):
             out('Dry run: weewx.conf not changed.')
@@ -323,6 +347,7 @@ class EcowittGatewayInstaller(ExtensionInstaller):
                         'show_all_batt': str(show_batt), 'api_key': api_key, 'app_key': app_key})
         section['catchup']['source'] = catchup
         section['loop_json'].update(loop_json)
+        section['mqtt'].update(mqtt)
 
         if mode == 'driver':
             config_dict.setdefault('Station', {})['station_type'] = SECTION
@@ -348,6 +373,54 @@ class EcowittGatewayInstaller(ExtensionInstaller):
             out('Gateway settings saved; the station driver and services were not changed.')
         out('Restart WeeWX to start using the new settings.')
         return True
+
+    def _ask_secret(self, prompt, current):
+        """Ask for a password without echoing it; Enter keeps the current value."""
+        if not self._interactive():
+            return current
+        hint = ' (Enter keeps the current one)' if current else ' (Enter for none)'
+        return getpass.getpass(f'{prompt}{hint}: ') or current
+
+    def _ask_mqtt(self, current, out):
+        """Ask whether and how to publish loop data to an MQTT broker; returns the [[mqtt]] settings."""
+        def cur(key, default=''):
+            return str(current.get(key, default))
+
+        enable = self._ask_yes('Publish each loop packet to an MQTT broker?', cur('enable', 'False').lower() == 'true')
+        if not enable:
+            return {'enable': 'False'}
+        if importlib.util.find_spec('paho') is None:
+            out('    Note: the paho-mqtt package is needed for MQTT. Install it with')
+            out('          sudo apt install python3-paho-mqtt      (Debian package install)')
+            out('          pip install paho-mqtt                   (pip install, in the WeeWX environment)')
+        host = self._ask('    Broker host name or IP address', cur('host', 'localhost'))
+        tls = self._ask_yes('    Use an encrypted (TLS) connection?', cur('tls', 'False').lower() == 'true')
+        default_port = cur('port', '8883' if tls else '1883')
+        if tls and default_port == '1883':
+            default_port = '8883'
+        port = self._ask('    Broker port', default_port)
+        if self._interactive():
+            try:
+                with socket.create_connection((host, int(port)), timeout=3):
+                    out(f'    Broker {host}:{port} is reachable')
+            except (OSError, ValueError) as e:
+                out(f'    Could not reach {host}:{port} ({e}); the driver will keep retrying once WeeWX starts.')
+        username = self._ask('    Username (Enter for none)', cur('username'))
+        password = self._ask_secret('    Password', cur('password')) if username else ''
+        topic = self._ask('    Topic', cur('topic', 'weewx/ecowitt')).rstrip('/')
+        out(f'    json       = one message with all fields on {topic}/loop')
+        out(f'    individual = one message per field, e.g. {topic}/outTemp')
+        out('    both       = both of the above')
+        fmt = self._ask('    Message format', cur('format', 'json').lower(), ['json', 'individual', 'both'])
+        units = self._ask('    Units', cur('units', 'native').lower(), ['native', 'us', 'metric', 'metricwx'])
+        retain = self._ask_yes('    Retain the latest messages on the broker?',
+                               cur('retain', 'False').lower() == 'true')
+        settings = {'enable': 'True', 'host': host, 'port': port, 'username': username, 'password': password,
+                    'topic': topic, 'format': fmt, 'units': units, 'retain': str(retain), 'tls': str(tls)}
+        if tls:
+            settings['ca_certs'] = self._ask('    CA certificate file (Enter for the system certificates)',
+                                             cur('ca_certs'))
+        return settings
 
     def _ask_loop_json(self, config_dict, current, out):
         """Ask whether and where to write ecwLoop.json; returns the [[loop_json]] settings."""

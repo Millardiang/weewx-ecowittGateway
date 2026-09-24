@@ -8,6 +8,29 @@ follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 Nothing yet.
 
+## [0.0.1b6] – 24 September 2026 — sixth beta
+
+### Added
+
+- **MQTT publishing.** A new `[[mqtt]]` option publishes every loop packet to an MQTT broker, in both
+  driver and service mode.
+  - Settings: host, port, username/password, topic, format, units, QoS, retain, and TLS (with
+    optional CA and client certificates).
+  - Formats: `json` sends one message on `<topic>/loop`; `individual` sends one message per field
+    on `<topic>/<field>`; `both` sends both.
+  - A retained `online`/`offline` status is published on `<topic>/status`, with a last-will message
+    so the broker reports `offline` if WeeWX stops unexpectedly.
+  - The connection runs in the background with automatic reconnection. Errors are logged once, and
+    the reconnection is logged.
+  - Needs the `paho-mqtt` package (1.x or 2.x), loaded only when MQTT is enabled. If it's missing,
+    the driver logs how to install it and carries on without MQTT.
+- **Installer prompts for MQTT**, including a check that the broker can be reached and a password
+  prompt that doesn't show what you type.
+
+### Changed
+
+- The JSON file and MQTT output share the same unit conversion and error logging.
+
 ## [0.0.1b5] – 24 September 2026 — fifth beta
 
 ### Added
@@ -203,6 +226,7 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
 [Unreleased]: #unreleased
+[0.0.1b6]: #001b6--24-september-2026--sixth-beta
 [0.0.1b5]: #001b5--24-september-2026--fifth-beta
 [0.0.1b4]: #001b4--24-september-2026--fourth-beta
 [0.0.1b3]: #001b3--24-september-2026--third-beta

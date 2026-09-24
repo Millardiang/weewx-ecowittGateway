@@ -4,7 +4,7 @@ A [WeeWX](https://weewx.com) driver and service for Ecowitt gateways and console
 **local HTTP API**. There's no cloud dependency for live data, and the gateway doesn't need any
 custom-server or upload configuration.
 
-**Version:** 0.0.1 beta 5 (`0.0.1b5`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
+**Version:** 0.0.1 beta 6 (`0.0.1b6`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
 
 This is a compact rewrite of `ecowitt_http.py`. It keeps the same
 configuration, field names and command-line tools, fixes a number of bugs and is about 80% smaller.
@@ -21,6 +21,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 - [Running as a service](#running-as-a-service)
 - [Rain and lightning](#rain-and-lightning)
 - [Loop data file (ecwLoop.json)](#loop-data-file-ecwloopjson)
+- [MQTT](#mqtt)
 - [Catchup (missed data)](#catchup-missed-data)
 - [Field mapping](#field-mapping)
 - [Command-line tools](#command-line-tools)
@@ -91,7 +92,7 @@ WeeWX 5.4.0 or later.
 In short:
 
 ```bash
-weectl extension install weewx-EcowittGateway-0.0.1b5.zip
+weectl extension install weewx-EcowittGateway-0.0.1b6.zip
 sudo systemctl restart weewx
 ```
 
@@ -109,6 +110,7 @@ The installer asks for your settings, so there's nothing to edit in `weewx.conf`
 | Show battery state for sensors with no signal | no |
 | Keep retrying at start-up if the gateway can't be reached (`loop_on_init`) | yes |
 | Write each loop packet to `ecwLoop.json`, where (web / data / tmp / custom) and in which units | no |
+| Publish each loop packet to an MQTT broker: host, TLS, port, login, topic, format, units, retain | no |
 
 The `[EcowittGateway]` section is placed directly after `[Station]`. Re-running the installer (for
 example for an upgrade) offers your current settings as the defaults.
@@ -150,6 +152,7 @@ earlier betas) if there is no `[EcowittGateway]` section; the installer moves it
 | `debug` | *(none)* | Comma-separated list of extra logging: `rain`, `raindelta`, `wind`, `lightning`, `loop`, `sensors`, `parser`, `catchup`, `collector`, `archive`. |
 | `api_key`, `app_key` | *(none)* | Ecowitt.net keys; only needed for Ecowitt.net catchup. |
 | `[[loop_json]]` | | Write each loop packet to `ecwLoop.json`. See [Loop data file](#loop-data-file-ecwloopjson). |
+| `[[mqtt]]` | | Publish each loop packet to an MQTT broker. See [MQTT](#mqtt). |
 | `[[catchup]]` | | See [Catchup](#catchup-missed-data). |
 | `[[field_map]]` | | Replaces the default field map completely (advanced). |
 | `[[field_map_extensions]]` | | Adds to or overrides individual entries in the default field map. |
@@ -249,6 +252,57 @@ In service mode the file holds the full augmented packet: the main driver's fiel
 
 > On systems where WeeWX runs under systemd with `PrivateTmp=true`, other programs can't see files
 > WeeWX writes to `/tmp`. Use the web folder or another folder instead.
+
+---
+
+## MQTT
+
+The driver can publish every loop packet to an MQTT broker, such as Mosquitto or Home Assistant's
+broker. It works in both driver and service mode. It needs the `paho-mqtt` Python package:
+
+```bash
+sudo apt install python3-paho-mqtt        # Debian package install of WeeWX
+pip install paho-mqtt                     # pip install (with the WeeWX virtual environment active)
+```
+
+If the package is missing, the driver logs how to install it and runs normally without MQTT.
+Versions 1.x and 2.x of `paho-mqtt` both work.
+
+```ini
+[EcowittGateway]
+    [[mqtt]]
+        enable = True
+        host = localhost
+        port = 1883
+        username = ""
+        password = ""
+        topic = weewx/ecowitt
+        format = json          # json | individual | both
+        units = native         # native | us | metric | metricwx
+        qos = 0                # 0, 1 or 2
+        retain = False
+        tls = False            # True for an encrypted connection (usually port 8883)
+        ca_certs = ""          # CA certificate file; blank uses the system certificates
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `host`, `port` | `localhost`, `1883` (`8883` with TLS) | The broker. |
+| `username`, `password` | *(none)* | Broker login, if needed. The password is stored in `weewx.conf`, so keep that file private. |
+| `topic` | `weewx/ecowitt` | Base topic. |
+| `format` | `json` | `json`: one message with every field on `<topic>/loop`. `individual`: one message per field on `<topic>/<field>`, e.g. `weewx/ecowitt/outTemp`. `both`: both kinds. |
+| `units` | `native` | Unit system of the values: `native` (the packet's own units), `us`, `metric` or `metricwx`. The `usUnits` field says which was used. |
+| `qos` | `0` | MQTT quality of service. |
+| `retain` | `False` | Keep the latest messages on the broker, so new subscribers get them straight away. |
+| `tls`, `ca_certs`, `certfile`, `keyfile`, `tls_insecure` | off | TLS settings. `certfile`/`keyfile` are for client certificates. `tls_insecure = True` skips the host name check (testing only). |
+| `client_id`, `keepalive` | automatic, `60` | Advanced connection settings. |
+
+The driver also publishes `online` or `offline` to `<topic>/status`, retained. The broker sends
+`offline` automatically if WeeWX stops unexpectedly.
+
+The connection is made in the background, so WeeWX starts even if the broker is down. The driver
+reconnects automatically, backing off up to once a minute. Publishing problems are logged once, and
+a message is logged when the connection is restored.
 
 ---
 
@@ -398,8 +452,8 @@ Logs:
 
 See **[VERSIONING.md](VERSIONING.md)**. In brief:
 
-- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b5`);
-- the current release is the fifth beta;
+- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b6`);
+- the current release is the sixth beta;
 - configuration compatibility with `ecowitt_http.py` is kept throughout 0.x.
 
 ---

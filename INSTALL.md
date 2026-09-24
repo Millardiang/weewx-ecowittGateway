@@ -57,6 +57,20 @@ Write each loop packet to ecwLoop.json (for web pages and scripts)? (y/n) [n]: y
     custom = a folder or file path of your choice
 Where should ecwLoop.json be written (web/data/tmp/custom) [web]:
 Units for ecwLoop.json (native/us/metric/metricwx) [native]:
+Publish each loop packet to an MQTT broker? (y/n) [n]: y
+    Broker host name or IP address [localhost]: 192.168.1.20
+    Use an encrypted (TLS) connection? (y/n) [n]:
+    Broker port [1883]:
+    Broker 192.168.1.20:1883 is reachable
+    Username (Enter for none) []: weewx
+    Password (Enter for none):
+    Topic [weewx/ecowitt]:
+    json       = one message with all fields on weewx/ecowitt/loop
+    individual = one message per field, e.g. weewx/ecowitt/outTemp
+    both       = both of the above
+    Message format (json/individual/both) [json]:
+    Units (native/us/metric/metricwx) [native]:
+    Retain the latest messages on the broker? (y/n) [n]:
 ```
 
 - **IP address:** the installer contacts the gateway to check the address. If there's no answer,
@@ -72,6 +86,10 @@ Units for ecwLoop.json (native/us/metric/metricwx) [native]:
 - **skip:** only saves the gateway settings.
 - **ecwLoop.json:** optional. Writes every loop packet to a JSON file for live web pages or
   scripts, in the location and units you choose. See the README for details.
+- **MQTT:** optional. Publishes every loop packet to an MQTT broker. The installer checks the
+  broker can be reached, and the password isn't shown as you type it. This needs the `paho-mqtt`
+  package: `sudo apt install python3-paho-mqtt` (Debian) or `pip install paho-mqtt` (pip, with the
+  WeeWX virtual environment active). The installer tells you if it's missing.
 
 The `[EcowittGateway]` section is written directly after `[Station]`. When re-run, for example for an
 upgrade, the installer offers your current settings as the defaults.
@@ -97,7 +115,7 @@ It saves the default settings with `ip_address = replace_me` and doesn't change 
 
 ```bash
 # 1. Install the extension and answer the prompts
-sudo weectl extension install weewx-EcowittGateway-0.0.1b5.zip
+sudo weectl extension install weewx-EcowittGateway-0.0.1b6.zip
 
 # 2. Check it can talk to the gateway
 sudo weectl device --live-data
@@ -110,7 +128,7 @@ sudo journalctl -u weewx -f
 When it's working, the log shows lines like:
 
 ```
-EcowittHttpDriver: version is 0.0.1b5
+EcowittHttpDriver: version is 0.0.1b6
      device IP address is 192.168.1.100
 EcowittHttpCollector startup
 Using 'rain.0x13.val' for rain total
@@ -122,7 +140,7 @@ Using 'rain.0x13.val' for rain total
 sudo systemctl stop weewx
 sudo weectl extension list                       # note the old extension's name
 sudo weectl extension uninstall <old-name>       # or delete /etc/weewx/bin/user/ecowitt_http.py
-sudo weectl extension install weewx-EcowittGateway-0.0.1b5.zip
+sudo weectl extension install weewx-EcowittGateway-0.0.1b6.zip
 sudo systemctl start weewx
 ```
 
@@ -182,7 +200,7 @@ source ~/weewx-venv/bin/activate
 source ~/weewx-venv/bin/activate
 
 # 1. Install the extension and answer the prompts
-weectl extension install weewx-EcowittGateway-0.0.1b5.zip
+weectl extension install weewx-EcowittGateway-0.0.1b6.zip
 
 # 2. Check it can talk to the gateway
 weectl device --live-data
@@ -204,7 +222,7 @@ source ~/weewx-venv/bin/activate
 sudo systemctl stop weewx                        # or stop weewxd
 weectl extension list
 weectl extension uninstall <old-name>            # or delete ~/weewx-data/bin/user/ecowitt_http.py
-weectl extension install weewx-EcowittGateway-0.0.1b5.zip
+weectl extension install weewx-EcowittGateway-0.0.1b6.zip
 sudo systemctl start weewx
 ```
 

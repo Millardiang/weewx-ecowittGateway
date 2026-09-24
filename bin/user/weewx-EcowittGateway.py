@@ -3,13 +3,13 @@
 """weewx-EcowittGateway.py
 
 WeeWX driver and service for Ecowitt gateways/consoles using the Ecowitt local
-HTTP API.
+HTTP API, or the binary TCP API for the GW1000/WH2650 (which have no HTTP API).
 
 Copyright (C) 2026 Ian Millard
 
-Derived from ecowitt_http.py, which carries the following notices:
+Derived from the original ecowitt_http.py, which carries the following notice:
     Copyright (C) 2024-25 Gary Roderick                 gjroderick<at>gmail.com
-
+    
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
 Foundation, either version 3 of the License, or (at your option) any later
@@ -22,7 +22,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 0.0.1 beta 7
+Version: 0.0.1 beta 8
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -41,6 +41,7 @@ import calendar
 import collections
 import csv
 import datetime
+import functools
 import io
 import json
 import logging
@@ -82,7 +83,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '0.0.1b7'
+DRIVER_VERSION = '0.0.1b8'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -115,12 +116,16 @@ def driver_config(config_dict):
     return {}
 
 
-SUPPORTED_DEVICES = ('GW1100', 'GW1200', 'GW2000', 'GW3000', 'WN1700', 'WN1820', 'WN1821',
+SUPPORTED_DEVICES = ('GW1000', 'WH2650', 'GW1100', 'GW1200', 'GW2000', 'GW3000', 'WN1700', 'WN1820', 'WN1821',
                      'WN1920', 'WN1980', 'WS6210', 'WS3800', 'WS3820', 'WS3900', 'WS3910')
-UNSUPPORTED_DEVICES = ('GW1000',)
+# devices with only the binary TCP API (no local HTTP API)
+TCP_ONLY_DEVICES = ('GW1000', 'WH2650')
+UNSUPPORTED_DEVICES = ()
 KNOWN_DEVICES = SUPPORTED_DEVICES + UNSUPPORTED_DEVICES
 
 DEFAULT_MAX_TRIES = 3
+DEFAULT_API = 'auto'
+DEFAULT_TCP_PORT = 45000
 DEFAULT_RETRY_WAIT = 2
 DEFAULT_URL_TIMEOUT = 10
 DEFAULT_CATCHUP_GRACE = 0
@@ -421,6 +426,10 @@ class UnknownApiCommand(Exception):
 
 class DeviceIOError(Exception):
     pass
+
+
+class UnsupportedFeatureError(DeviceIOError):
+    """The device's API does not provide this information (e.g. a GW1000 has no HTTP API)."""
 
 
 class ParseError(Exception):
@@ -1068,7 +1077,8 @@ class EcowittCommon:
             get_soilad=to_bool(ec_config.get('get_soilad', DEFAULT_GET_SOILAD)),
             log_unknown_fields=to_bool(ec_config.get('log_unknown_fields', False)),
             fw_update_check_interval=int(ec_config.get('firmware_update_check_interval', DEFAULT_FW_CHECK_INTERVAL)),
-            sensor_map=ec_config.get('sensor_map'), debug=dbg)
+            sensor_map=ec_config.get('sensor_map'), api=ec_config.get('api', DEFAULT_API),
+            tcp_port=to_int(ec_config.get('tcp_port', DEFAULT_TCP_PORT)), debug=dbg)
         self.rain, self.piezo, self.lightning = self._trackers()
         self.loop_json = LoopJsonWriter(ec_config.get('loop_json', {}), html_dir)
         self.mqtt = MqttPublisher(ec_config.get('mqtt', {}))
@@ -1362,7 +1372,12 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
         source = (self.catchup_source or 'either').lower()
         if source not in ('either', 'both', 'net', 'device'):
             raise CatchupObjectError
-        if source != 'net':
+        if source != 'net' and self.collector.device.tcp:
+            log.info('Catchup: %s has no local HTTP API, so missed data can only come from Ecowitt.net',
+                     self.collector.device.model)
+            if source == 'device':
+                raise CatchupObjectError
+        elif source != 'net':
             try:
                 return EcowittDeviceCatchup(ip_address=self.ip_address, unit_system=self.unit_system,
                                             catchup_grace=self.catchup_grace, catchup_retries=self.catchup_retries,
@@ -1492,7 +1507,8 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
         drv_config = config_dict.get(DRIVER_NAME, {})
         mapper = HttpMapper(**drv_config)
         try:
-            paired = EcowittDevice(ip_address=drv_config.get('ip_address')).paired_rain_gauges
+            paired = make_device(drv_config.get('ip_address'), api=drv_config.get('api', DEFAULT_API),
+                                 tcp_port=drv_config.get('tcp_port', DEFAULT_TCP_PORT)).paired_rain_gauges
         except (weewx.ViolatedPrecondition, DeviceIOError, ParseError) as e:
             print()
             print(f'Unable to query the device for paired rain gauges: {e}')
@@ -1641,6 +1657,8 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
             parser.add_option(opt, dest=dest, action='store_true', help=text)
         parser.add_option('--ip-address', dest='ip_address', help='device IP address to use')
         parser.add_option('--output', dest='output', metavar='FILE', help='file for --dump-api output')
+        parser.add_option('--api', dest='api', type='choice', choices=['auto', 'http', 'tcp'],
+                          help='device API: http, tcp (GW1000/WH2650) or auto (the default)')
         for opt, dest, text in (('--max-tries', 'max_tries', 'max number of attempts to contact the device'),
                                 ('--retry-wait', 'retry_wait',
                                  'how long to wait between attempts to contact the device'),
@@ -2024,7 +2042,8 @@ class EcowittHttpCollector:
     def __init__(self, ip_address, poll_interval=DEFAULT_POLL_INTERVAL, max_tries=DEFAULT_MAX_TRIES,
                  retry_wait=DEFAULT_RETRY_WAIT, url_timeout=DEFAULT_URL_TIMEOUT, unit_system=DEFAULT_UNIT_SYSTEM,
                  show_battery=DEFAULT_FILTER_BATTERY, log_unknown_fields=False, get_soilad=DEFAULT_GET_SOILAD,
-                 fw_update_check_interval=DEFAULT_FW_CHECK_INTERVAL, sensor_map=None, debug=None):
+                 fw_update_check_interval=DEFAULT_FW_CHECK_INTERVAL, sensor_map=None, api=DEFAULT_API,
+                 tcp_port=DEFAULT_TCP_PORT, debug=None):
         self.queue = queue.Queue()
         self.poll_interval = poll_interval
         self.debug = debug or DebugOptions()
@@ -2043,9 +2062,11 @@ class EcowittHttpCollector:
         if self.sensor_mapper:
             log.info('     %d sensor(s) reported on fixed channels by hardware ID (sensor_map)',
                      len(self.sensor_mapper.targets))
-        self.device = EcowittDevice(ip_address=ip_address, unit_system=unit_system, max_tries=max_tries,
-                                    retry_wait=retry_wait, url_timeout=url_timeout, show_battery=show_battery,
-                                    get_soilad=get_soilad, log_unknown_fields=log_unknown_fields, debug=self.debug)
+        self.make_device = functools.partial(
+            make_device, ip_address, api=api, tcp_port=tcp_port, unit_system=unit_system, max_tries=max_tries,
+            retry_wait=retry_wait, url_timeout=url_timeout, show_battery=show_battery, get_soilad=get_soilad,
+            log_unknown_fields=log_unknown_fields, debug=self.debug)
+        self.device = self.make_device()
         self.log_failures = True
         self.thread = None
         self.collect_data = False
@@ -2095,6 +2116,8 @@ class EcowittHttpCollector:
 
     def get_current_data(self):
         timestamp = int(time.time())
+        if not self.device.detected:
+            self.device = self.make_device()
         dev = self.device
         data = dev.get_live_data()
         for part in (dev.get_rain_totalspart(), dev.get_piezo_rain_datapart(), dev.get_device_info_datapart(),
@@ -2874,6 +2897,8 @@ class EcowittSensors:
 class EcowittDevice:
     """An Ecowitt device accessed via the local HTTP API."""
 
+    tcp = False
+    detected = True
     unit_code_to_string = {
         'temperature': ('group_temperature', ('degree_C', 'degree_F')),
         'pressure': ('group_pressure', ('hPa', 'inHg', 'mmHg')),
@@ -3025,6 +3050,326 @@ class EcowittDevice:
 
 
 # ---------------------------------------------------------------------------
+# Binary TCP API (GW1000 / WH2650, which have no local HTTP API)
+# ---------------------------------------------------------------------------
+
+def _tcp_live_items():
+    """TCP API live data item id -> (byte length, kind, flattened field name)."""
+    items = {0x01: (2, 'temp', 'wh25.intemp'), 0x06: (1, 'hum', 'wh25.inhumi'), 0x08: (2, 'press', 'wh25.abs'),
+             0x09: (2, 'press', 'wh25.rel'), 0x07: (1, 'hum', 'common_list.0x07.val'),
+             0x0A: (2, 'int', 'common_list.0x0A.val'), 0x0F: (2, 'gain', 'rain_gain'),
+             0x15: (4, 'light', 'common_list.0x15.val'), 0x16: (2, 'uv', 'common_list.0x16.val'),
+             0x17: (1, 'int', 'common_list.0x17.val'), 0x18: (6, None, None), 0x4C: (16, None, None),
+             0x60: (1, 'dist', 'lightning.distance'), 0x61: (4, 'utc', 'lightning.timestamp'),
+             0x62: (4, 'int', 'lightning.count'), 0x6B: (24, 'wh46', None), 0x6C: (4, 'int', 'debug.heap'),
+             0x70: (16, 'wh45', None), 0x71: (None, None, None), 0x7A: (1, 'int', 'rain_priority'),
+             0x7B: (1, 'int', 'radcompensation'), 0x82: (2, None, None), 0x87: (20, 'gains', None),
+             0x88: (3, 'reset', None)}
+    for code in (0x02, 0x03, 0x04, 0x05):
+        items[code] = (2, 'temp', f'common_list.0x{code:02X}.val')
+    for code in (0x0B, 0x0C, 0x19):
+        items[code] = (2, 'speed', f'common_list.0x{code:02X}.val')
+    for array, codes in (('rain', (0x0D, 0x0E, 0x10, 0x11)), ('piezoRain', (0x81, 0x80))):
+        for code, obs in zip(codes, ('0x0D', '0x0E', '0x10', '0x11')):
+            items[code] = (2, 'rate' if obs == '0x0E' else 'rain', f'{array}.{obs}.val')
+    for code, obs in ((0x12, '0x12'), (0x13, '0x13'), (0x14, '0x14')):
+        items[code] = (4, 'rain', f'rain.{obs}.val')
+    for code, obs in ((0x83, '0x10'), (0x84, '0x11'), (0x85, '0x12'), (0x86, '0x13')):
+        items[code] = (4, 'rain', f'piezoRain.{obs}.val')
+    for ch in range(1, 9):
+        items[0x19 + ch] = (2, 'temp', f'ch_aisle.{ch}.temp')
+        items[0x21 + ch] = (1, 'hum', f'ch_aisle.{ch}.humidity')
+        items[0x62 + ch] = (3, 'wn34', ch)
+        items[0x71 + ch] = (1, 'hum', f'ch_leaf.{ch}.humidity')
+    for ch in range(1, 17):
+        items[0x29 + 2 * ch] = (2, None, None)  # soil temperature (no current sensor)
+        items[0x2A + 2 * ch] = (1, 'hum', f'ch_soil.{ch}.humidity')
+    for ch in range(1, 5):
+        items[0x2A if ch == 1 else 0x4F + ch] = (2, 'pm', f'ch_pm25.{ch}.PM25')
+        items[0x4C + ch] = (2, 'pm', f'ch_pm25.{ch}.PM25_24H')
+        items[0x57 + ch] = (1, 'int', f'ch_leak.{ch}.status')
+    return items
+
+
+def _tcp_sensor_addresses():
+    """TCP API sensor index -> (model, channel or None); the same numbers as the HTTP API 'type'."""
+    table = {0: ('wh65', None), 1: ('wh68', None), 2: ('ws80', None), 3: ('wh40', None), 4: ('wh25', None),
+             5: ('wh26', None), 26: ('wh57', None), 39: ('wh45', None), 48: ('ws90', None)}
+    # (model, address of the first channel, first channel, last channel)
+    for model, address, first, last in (('wn31', 6, 1, 8), ('wh51', 14, 1, 8), ('wh41', 22, 1, 4),
+                                        ('wh55', 27, 1, 4), ('wn34', 31, 1, 8), ('wn35', 40, 1, 8),
+                                        ('wh51', 58, 9, 16)):
+        for ch in range(first, last + 1):
+            table[address + ch - first] = (model, f'ch{ch}')
+    return table
+
+
+class EcowittTcpApi:
+    """Client for the binary Ecowitt TCP API (port 45000), used by the GW1000 and WH2650."""
+
+    commands = {'CMD_READ_STATION_MAC': 0x26, 'CMD_GW1000_LIVEDATA': 0x27, 'CMD_READ_SSSS': 0x30,
+                'CMD_READ_RAINDATA': 0x34, 'CMD_READ_SENSOR_ID_NEW': 0x3C, 'CMD_READ_FIRMWARE_VERSION': 0x50,
+                'CMD_READ_RAIN': 0x57}
+    long_size = (0x12, 0x27, 0x3C, 0x57, 0x58)
+
+    def __init__(self, ip_address, port=DEFAULT_TCP_PORT, max_tries=DEFAULT_MAX_TRIES, retry_wait=DEFAULT_RETRY_WAIT,
+                 timeout=DEFAULT_URL_TIMEOUT):
+        self.ip_address = ip_address
+        self.host = str(ip_address).split(':')[0]
+        self.port = int(port or DEFAULT_TCP_PORT)
+        self.max_tries = max_tries or DEFAULT_MAX_TRIES
+        self.retry_wait = DEFAULT_RETRY_WAIT if retry_wait is None else retry_wait
+        self.timeout = timeout or DEFAULT_URL_TIMEOUT
+
+    @staticmethod
+    def packet(cmd, payload=b''):
+        body = bytes([cmd, 3 + len(payload)]) + payload
+        return b'\xff\xff' + body + bytes([calc_checksum(body)])
+
+    def request(self, cmd):
+        """Send a command once and return the whole validated response packet."""
+        with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+            sock.sendall(self.packet(cmd))
+            size_len = 2 if cmd in self.long_size else 1
+            resp = b''
+            total = None
+            while total is None or len(resp) < total:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                resp += chunk
+                if total is None and len(resp) >= 3 + size_len:
+                    total = 2 + int.from_bytes(resp[3:3 + size_len], 'big')
+        if len(resp) < 4 + size_len or resp[:2] != b'\xff\xff' or resp[2] != cmd:
+            raise InvalidApiResponseError(f'invalid response to command 0x{cmd:02X}: {bytes_to_hex(resp[:16])}')
+        resp = resp[:total]
+        if len(resp) != total or calc_checksum(resp[2:-1]) != resp[-1]:
+            raise InvalidApiResponseError(f'incomplete response or bad checksum for command 0x{cmd:02X}')
+        return resp
+
+    def call(self, cmd):
+        """Return the data part of the response to cmd, retrying; raises DeviceIOError on failure."""
+        error = None
+        for attempt in range(1, self.max_tries + 1):
+            try:
+                resp = self.request(cmd)
+            except (OSError, InvalidApiResponseError) as e:
+                error = e
+                if weewx.debug >= 2:
+                    log.debug('TCP API command 0x%02X failed on attempt %d of %d: %s', cmd, attempt, self.max_tries, e)
+                if attempt < self.max_tries:
+                    time.sleep(self.retry_wait)
+                continue
+            return resp[(5 if cmd in self.long_size else 4):-1]
+        raise DeviceIOError(f'TCP API command 0x{cmd:02X} to {self.host}:{self.port} failed: {error}')
+
+
+class EcowittTcpDevice:
+    """An Ecowitt GW1000/WH2650 accessed via the binary TCP API.
+
+    Returns data with the same field names and units as EcowittDevice, so the rest of the
+    driver (field map, sensor map, rain and lightning handling) is shared.
+    """
+
+    tcp = True
+    detected = True
+    live_items = _tcp_live_items()
+    # sensors whose battery byte is a voltage (volts per unit); the others report a flag or a 0-6 level
+    battery_volts = {'wh68': 0.02, 'ws80': 0.02, 'ws90': 0.02, 'wn34': 0.02, 'wn35': 0.02, 'wh40': 0.1, 'wh51': 0.1}
+    # live data voltage fields the HTTP API provides, filled from the sensor battery voltage
+    voltage_fields = {'wh40': 'rain.0x13.voltage', 'ws90': 'piezoRain.0x13.voltage', 'wh51': 'ch_soil.{}.voltage',
+                      'wn35': 'ch_leaf.{}.voltage'}
+    sensor_addresses = _tcp_sensor_addresses()
+    _groups = {'temp': 'group_temperature', 'hum': 'group_percent', 'press': 'group_pressure',
+               'speed': 'group_speed', 'rain': 'group_rain', 'rate': 'group_rainrate', 'light': 'group_radiation',
+               'pm': 'group_concentration', 'dist': 'group_distance'}
+    _units = {'group_temperature': 'degree_C', 'group_percent': 'percent', 'group_pressure': 'hPa',
+              'group_speed': 'meter_per_second', 'group_rain': 'mm', 'group_rainrate': 'mm_per_hour',
+              'group_radiation': 'watt_per_meter_squared', 'group_concentration': 'microgram_per_meter_cubed',
+              'group_distance': 'km'}
+
+    def __init__(self, ip_address, unit_system=DEFAULT_UNIT_SYSTEM, max_tries=DEFAULT_MAX_TRIES,
+                 retry_wait=DEFAULT_RETRY_WAIT, url_timeout=DEFAULT_URL_TIMEOUT, show_battery=DEFAULT_FILTER_BATTERY,
+                 tcp_port=DEFAULT_TCP_PORT, debug=None, **_):
+        if ip_address is None:
+            raise weewx.ViolatedPrecondition('device IP address cannot be None')
+        self.api = EcowittTcpApi(ip_address, port=tcp_port, max_tries=max_tries, retry_wait=retry_wait,
+                                 timeout=url_timeout)
+        self.unit_system = unit_system
+        self.show_battery = show_battery
+        self.sensors = EcowittSensors()
+        self.unknown = OnceLogger('TCP API live data')
+        self._model = None
+
+    @property
+    def ip_address(self):
+        return self.api.ip_address
+
+    def _value(self, kind, raw):
+        group = self._groups.get(kind)
+        value = {'temp': lambda: int.from_bytes(raw, 'big', signed=True) / 10,
+                 'light': lambda: int.from_bytes(raw, 'big') / 10 / 126.7,
+                 'gain': lambda: int.from_bytes(raw, 'big') / 100,
+                 'dist': lambda: raw[0] if 0 < raw[0] <= 40 else None,
+                 'utc': lambda: None if raw == b'\xff\xff\xff\xff' else int.from_bytes(raw, 'big'),
+                 'int': lambda: int.from_bytes(raw, 'big'), 'hum': lambda: raw[0],
+                 'uv': lambda: int(int.from_bytes(raw, 'big') / 10)}.get(kind, lambda: int.from_bytes(raw, 'big') / 10)()
+        if group is None or value is None:
+            return value
+        vt = weewx.units.ValueTuple(value, self._units[group], group)
+        return weewx.units.convert(vt, weewx.units.std_groups[self.unit_system][group]).value
+
+    def _co2(self, data, raw):
+        """WH45 (16 bytes) or WH46 (24 bytes) CO2/PM sensor block."""
+        conv = self._value
+        data.update({'co2.temp': conv('temp', raw[0:2]), 'co2.humidity': raw[2], 'co2.PM10': conv('pm', raw[3:5]),
+                     'co2.PM10_24H': conv('pm', raw[5:7]), 'co2.PM25': conv('pm', raw[7:9]),
+                     'co2.PM25_24H': conv('pm', raw[9:11]), 'co2.CO2': int.from_bytes(raw[11:13], 'big'),
+                     'co2.CO2_24H': int.from_bytes(raw[13:15], 'big')})
+        if len(raw) >= 24:
+            data.update({'co2.PM1': conv('pm', raw[16:18]), 'co2.PM1_24H': conv('pm', raw[18:20]),
+                         'co2.PM4': conv('pm', raw[20:22]), 'co2.PM4_24H': conv('pm', raw[22:24])})
+
+    def parse_live_data(self, payload):
+        data, i = {}, 0
+        while i < len(payload):
+            code = payload[i]
+            if code not in self.live_items:
+                self.unknown.error(f'unknown item 0x{code:02X}; the rest of the data in this packet is ignored')
+                break
+            length, kind, key = self.live_items[code]
+            if length is None:  # 0x71: a length byte, then that many bytes
+                length = 1 + (payload[i + 1] if i + 1 < len(payload) else 0)
+            raw = payload[i + 1:i + 1 + length]
+            i += 1 + length
+            if len(raw) < length:
+                self.unknown.error(f'item 0x{code:02X} is truncated')
+                break
+            if kind == 'wn34':
+                data[f'ch_temp.{key}.temp'] = self._value('temp', raw[0:2])
+                data[f'ch_temp.{key}.voltage'] = round(raw[2] * 0.02, 2)
+            elif kind in ('wh45', 'wh46'):
+                self._co2(data, raw)
+            elif kind == 'gains':
+                data.update({f'gain{n + 1}': int.from_bytes(raw[2 * n:2 * n + 2], 'big') / 100 for n in range(5)})
+            elif kind == 'reset':
+                data.update({'rain_reset_day': raw[0], 'rain_reset_week': raw[1], 'rain_reset_year': raw[2]})
+            elif kind is not None:
+                data[key] = self._value(kind, raw)
+        for ch in range(1, 9):
+            if f'ch_aisle.{ch}.temp' in data or f'ch_aisle.{ch}.humidity' in data:
+                data[f'ch_aisle.{ch}.channel'] = ch
+        self.unknown.ok('data decoded again')
+        return data
+
+    def get_live_data(self, flatten_data=True):
+        return self.parse_live_data(self.api.call(0x27))
+
+    def get_sensors_data(self, connected_only=DEFAULT_ONLY_REGISTERED_SENSORS, flatten_data=True):
+        payload, parsed, volts = self.api.call(0x3C), {}, {}
+        for n in range(0, len(payload) - 6, 7):
+            address, sid, batt, signal = payload[n], int.from_bytes(payload[n + 1:n + 5], 'big'), \
+                payload[n + 5], payload[n + 6]
+            if address not in self.sensor_addresses:
+                continue
+            unregistered = sid in (0xFFFFFFFE, 0xFFFFFFFF)
+            if connected_only and unregistered:
+                continue
+            model, channel = self.sensor_addresses[address]
+            sensor = {'address': address, 'id': f'{sid:X}', 'enabled': sid != 0xFFFFFFFE, 'rssi': None,
+                      'signal': None if unregistered else signal,
+                      'battery': None if unregistered or (not self.show_battery and signal == 0) else batt}
+            if sensor['battery'] is not None and model in self.battery_volts:
+                sensor['battery'] = sensor['voltage'] = round(batt * self.battery_volts[model], 2)
+                if model in self.voltage_fields:
+                    volts[self.voltage_fields[model].format(channel[2:] if channel else '')] = sensor['voltage']
+            if channel is None:
+                parsed[model] = sensor
+            else:
+                parsed.setdefault(model, {})[channel] = sensor
+        return {**flatten(parsed), **volts} if flatten_data else parsed
+
+    # data the HTTP API spreads over other calls is already in the live data
+    def get_rain_totalspart(self):
+        return {}
+
+    get_piezo_rain_datapart = get_device_info_datapart = get_soil_adnow_data = get_rain_totalspart
+
+    def get_stationtype(self):
+        return {'stationtype': self.model}
+
+    @property
+    def model(self):
+        if self._model is None:
+            data = self.api.call(0x50)
+            self._model = data[1:1 + data[0]].decode('ascii', 'replace').strip() if data else None
+        return self._model
+
+    @property
+    def firmware_version(self):
+        parts = (self.model or '').split('_')
+        return parts[1] if len(parts) > 1 else None
+
+    @property
+    def mac_address(self):
+        return bytes_to_hex(self.api.call(0x26)[0:6], separator=':')
+
+    firmware_update_avail = firmware_update_message = None
+
+    @property
+    def sensor_firmware_versions(self):
+        return {}
+
+    @property
+    def paired_rain_gauges(self):
+        info = self.get_sensors_data(connected_only=True, flatten_data=False)
+        return tuple(g for g, models in (('tipping', ('wh40', 'wh69')), ('piezo', ('ws85', 'ws90')))
+                     if any(m in info for m in models))
+
+    def __getattr__(self, name):
+        if name.startswith('get_'):
+            def unsupported(*_args, **_kwargs):
+                raise UnsupportedFeatureError(f'{self._model or "this device"} (TCP API) does not provide '
+                                              f"'{name[4:]}' information")
+            return unsupported
+        raise AttributeError(name)
+
+
+def make_device(ip_address, api=DEFAULT_API, tcp_port=DEFAULT_TCP_PORT, **kwargs):
+    """An EcowittDevice (HTTP API) or EcowittTcpDevice (GW1000 TCP API).
+
+    api is 'http', 'tcp' or 'auto'. Auto asks the TCP API for the model first (quick, and it
+    avoids HTTP errors in the log for a GW1000): a GW1000 or WH2650 uses the TCP API, anything
+    else the HTTP API, with the TCP API as a fallback if the HTTP API does not answer.
+    """
+    api = str(api or DEFAULT_API).lower()
+    if api == 'tcp':
+        return EcowittTcpDevice(ip_address, tcp_port=tcp_port, **kwargs)
+    if api == 'http':
+        return EcowittDevice(ip_address, **kwargs)
+    tcp = EcowittTcpDevice(ip_address, tcp_port=tcp_port, **{**kwargs, 'max_tries': 1})
+    try:
+        model = tcp.model
+    except DeviceIOError:
+        model = None
+    tcp.api.max_tries = kwargs.get('max_tries') or DEFAULT_MAX_TRIES
+    if model and any(m in model.upper() for m in TCP_ONLY_DEVICES):
+        log.info('     %s has no local HTTP API; using the TCP API on port %d', model, tcp.api.port)
+        return tcp
+    device = EcowittDevice(ip_address, **kwargs)
+    try:
+        if device.model:
+            return device
+    except Exception:
+        pass
+    if model:
+        log.info('     %s did not answer the HTTP API; using the TCP API on port %d', model, tcp.api.port)
+        return tcp
+    device.detected = False  # neither API answered: the collector tries again later
+    return device
+
+
+# ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
 
@@ -3170,13 +3515,18 @@ class DirectEcowittDevice:
 
     def get_device(self):
         try:
-            return EcowittDevice(ip_address=self.ip_address, max_tries=self.opt('max_tries'),
-                                 retry_wait=self.opt('retry_wait'), url_timeout=self.opt('timeout'),
-                                 unit_system=self.unit_system, show_battery=self.show_battery)
+            return make_device(self.ip_address, api=self.api(), tcp_port=self.stn_dict.get('tcp_port'),
+                               max_tries=self.opt('max_tries'), retry_wait=self.opt('retry_wait'),
+                               url_timeout=self.opt('timeout'), unit_system=self.unit_system,
+                               show_battery=self.show_battery)
         except weewx.ViolatedPrecondition as e:
             print()
             print(f'Unable to obtain EcowittDevice object: {e}')
         return None
+
+    def api(self):
+        """Which device API to use: --api on the command line, else api in weewx.conf."""
+        return self.opt('api') or self.stn_dict.get('api', DEFAULT_API)
 
     def process_options(self):
         for options, method in self.actions:
@@ -3197,6 +3547,11 @@ class DirectEcowittDevice:
         try:
             print(f'Interrogating {BOLD}{device.model}{ENDC} at {BOLD}{device.ip_address}{ENDC}')
             return device, fetch(device)
+        except UnsupportedFeatureError as e:
+            print()
+            print(f'Not available: {e}.')
+            print('The GW1000 and WH2650 only provide live data, sensor, MAC address and firmware')
+            print('information through their TCP API.')
         except (DeviceIOError, socket.timeout) as e:
             print()
             print(f'Unable to connect to device at {self.ip_address}: {e}')
@@ -3640,7 +3995,15 @@ class DirectEcowittDevice:
                              'time': timestamp_to_string(int(time.time())), 'secrets_masked': not unmask}}
         print()
         print(f'Reading every API response from {self.ip_address}...')
-        for command in api.commands:
+        device = self.get_device()
+        if device is not None and device.tcp:
+            result['_about']['api'] = f'TCP port {device.api.port} (binary responses shown as hex)'
+            for name, cmd in device.api.commands.items():
+                try:
+                    result[name] = bytes_to_hex(device.api.request(cmd))
+                except (OSError, InvalidApiResponseError) as e:
+                    result[name] = {'_error': str(e)}
+        for command in () if device is not None and device.tcp else api.commands:
             for page in (1, 2, 3, 4, 5) if command == 'get_sensors_info' else (None,):
                 label = command if page is None else f'{command}?page={page}'
                 try:
@@ -3663,7 +4026,8 @@ class DirectEcowittDevice:
     def display_live_data(self):
         try:
             collector = EcowittHttpCollector(ip_address=self.ip_address, show_battery=self.show_battery,
-                                             sensor_map=self.sensor_map())
+                                             sensor_map=self.sensor_map(), api=self.api(),
+                                             tcp_port=self.stn_dict.get('tcp_port', DEFAULT_TCP_PORT))
             print()
             print(f'Interrogating {collector.device.model} at {self.ip_address}')
             current_data = collector.get_current_data()
@@ -3837,7 +4201,7 @@ class DirectEcowittDevice:
         """Create a driver from the station config (plus command line overrides) and pass it to action."""
         self.stn_dict['ip_address'] = self.ip_address
         for opt, key in (('poll_interval', 'poll_interval'), ('max_tries', 'max_tries'),
-                         ('retry_wait', 'retry_wait'), ('timeout', 'url_timeout')):
+                         ('retry_wait', 'retry_wait'), ('timeout', 'url_timeout'), ('api', 'api')):
             if self.opt(opt):
                 self.stn_dict[key] = self.opt(opt)
         if self.opt('no_sensor_map'):
@@ -3989,6 +4353,8 @@ def main():
             ('--unmask', 'unmask', 'unmask sensitive settings')):
         parser.add_argument(opt, dest=dest, action='store_true', help=text)
     parser.add_argument('--ip-address', dest='ip_address', help='device IP address to use')
+    parser.add_argument('--api', dest='api', choices=('auto', 'http', 'tcp'),
+                        help='device API: http, tcp (GW1000/WH2650) or auto (the default)')
     for opt, dest, default, text in (
             ('--poll-interval', 'poll_interval', None, 'how often to poll the device API'),
             ('--max-tries', 'max_tries', DEFAULT_MAX_TRIES, 'max number of attempts to contact the device'),

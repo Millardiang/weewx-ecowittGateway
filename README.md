@@ -4,7 +4,7 @@ A [WeeWX](https://weewx.com) driver and service for Ecowitt gateways and console
 **local HTTP API**. There's no cloud dependency for live data, and the gateway doesn't need any
 custom-server or upload configuration.
 
-**Version:** 0.0.1 beta (`0.0.1b1`) · **License:** GPL v3 or later · **Requires:** WeeWX 4 or 5, Python 3.7+
+**Version:** 0.0.1 beta 3 (`0.0.1b3`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
 
 This is a compact rewrite of `ecowitt_http.py`. It keeps the same
 configuration, field names and command-line tools, fixes a number of bugs and is about 80% smaller.
@@ -85,17 +85,31 @@ last archive record, from the gateway's SD card or from Ecowitt.net.
 ## Installation
 
 See **[INSTALL.md](INSTALL.md)** for step-by-step instructions for Debian/apt and pip installs of
-WeeWX 5, plus WeeWX 4.
+WeeWX 5.4.0 or later.
 
 In short:
 
 ```bash
-weectl extension install weewx-EcowittGateway.zip
-weectl station reconfigure --driver=user.weewx-EcowittGateway
+weectl extension install weewx-EcowittGateway-0.0.1b3.zip
 sudo systemctl restart weewx
 ```
 
-(On Debian, run the `weectl` commands with `sudo`.)
+(On Debian, run `weectl` with `sudo`.)
+
+The installer asks for your settings, so there's nothing to edit in `weewx.conf` by hand:
+
+| Prompt | Default |
+|---|---|
+| Gateway IP address (checked by contacting the gateway) | — |
+| Poll interval | 20 seconds |
+| Use as the station driver, as a service alongside another driver, or skip | driver |
+| Which gauge feeds WeeWX `rain`/`rainRate` (asked only if both gauge types are paired) | tipping |
+| Where to fetch missed data from at start-up, and Ecowitt.net keys if needed | either |
+| Show battery state for sensors with no signal | no |
+| Keep retrying at start-up if the gateway can't be reached (`loop_on_init`) | yes |
+
+The `[EcowittGateway]` section is placed directly after `[Station]`. Re-running the installer (for
+example for an upgrade) offers your current settings as the defaults.
 
 > The module name contains a hyphen, so it can't be used in a Python `import` statement. That's fine:
 > WeeWX loads drivers by name, so `driver = user.weewx-EcowittGateway` works as normal.
@@ -104,13 +118,15 @@ sudo systemctl restart weewx
 
 ## Configuration
 
-All settings live in the `[EcowittHttp]` section of `weewx.conf`. Only `ip_address` is required.
+All settings live in the `[EcowittGateway]` section of `weewx.conf`. Only `ip_address` is required.
+The driver also reads a section called `[EcowittHttp]` (the name used by `ecowitt_http.py` and
+earlier betas) if there is no `[EcowittGateway]` section; the installer moves it for you.
 
 ```ini
 [Station]
-    station_type = EcowittHttp
+    station_type = EcowittGateway
 
-[EcowittHttp]
+[EcowittGateway]
     driver = user.weewx-EcowittGateway
     ip_address = 192.168.1.100
 ```
@@ -122,6 +138,7 @@ All settings live in the `[EcowittHttp]` section of `weewx.conf`. Only `ip_addre
 | `max_tries` | `3` | Attempts per API request before giving up. |
 | `retry_wait` | `2` | Seconds to wait between attempts after a timeout. |
 | `url_timeout` | `10` | HTTP timeout in seconds. |
+| `rain_source` | `tipping` | Gauge that feeds WeeWX `rain` and `rainRate`: `tipping` or `piezo`. |
 | `show_all_batt` | `False` | Report battery state even for sensors with no signal. |
 | `log_unknown_fields` | `False` | Log unknown API groups and fields at info level. |
 | `firmware_update_check_interval` | `86400` | Seconds between firmware update checks (`0` turns them off). Available updates are logged. |
@@ -134,7 +151,7 @@ All settings live in the `[EcowittHttp]` section of `weewx.conf`. Only `ip_addre
 | `[[field_map]]` | | Replaces the default field map completely (advanced). |
 | `[[field_map_extensions]]` | | Adds to or overrides individual entries in the default field map. |
 
-Also recommended (`weectl station reconfigure` sets these for you):
+Also needed in driver mode (the installer sets these for you):
 
 ```ini
 loop_on_init = 1                    # keep retrying if the gateway isn't reachable at start-up
@@ -158,7 +175,7 @@ To add gateway data to another driver's loop packets (for example an Ecowitt cus
 install the extension but leave `station_type` alone, then add the service:
 
 ```ini
-[EcowittHttp]                       # a section called [EcowittHttpService] is also accepted
+[EcowittGateway]                       # a section called [EcowittHttpService] is also accepted
     ip_address = 192.168.1.100
     poll_interval = 20
     max_age = 60                    # ignore gateway data older than this (seconds)
@@ -197,14 +214,15 @@ total (or the monthly total if there is no yearly one).
 The first packet after start-up has no rain or strike delta (there's no previous total to compare
 with). When a total resets, for example at the start of a new year, the new total is used as the delta.
 
-If both gauge types are paired, choose which one feeds WeeWX's standard `rain`/`rainRate` fields
-during `weectl station reconfigure`, or set it directly:
+WeeWX's standard `rain` and `rainRate` fields come from the gauge chosen with `rain_source`. The
+installer asks which one if both gauge types are paired, or you can set it directly:
 
 ```ini
-[EcowittHttp]
-    [[field_map_extensions]]
-        rainRate = piezoRain.0x0E.val
+[EcowittGateway]
+    rain_source = piezo     # tipping (the default) or piezo
 ```
+
+The other gauge is still recorded, in `t_rain` or `p_rain`/`hail`.
 
 ---
 
@@ -213,9 +231,9 @@ during `weectl station reconfigure`, or set it directly:
 At start-up WeeWX asks the driver for any records it missed:
 
 ```ini
-[EcowittHttp]
+[EcowittGateway]
     [[catchup]]
-        source = either     # either | device | net
+        source = either     # either | device | net | none
         grace = 0           # seconds after the last good record before accepting history
         retries = 3         # download attempts per SD-card file
 ```
@@ -223,8 +241,9 @@ At start-up WeeWX asks the driver for any records it missed:
 - **`device`**: reads history CSV files from the gateway's SD card (GW2000/GW3000 and consoles with
   an SD card) on port 81.
 - **`net`**: reads 5-minute history from Ecowitt.net. This needs `api_key` and `app_key` in
-  `[EcowittHttp]`. Only the last 90 days are available.
+  `[EcowittGateway]`. Only the last 90 days are available.
 - **`either`** (the default): tries the SD card first, then Ecowitt.net.
+- **`none`**: don't fetch missed data.
 
 ---
 
@@ -240,7 +259,7 @@ python3 weewx-EcowittGateway.py --config=/path/to/weewx.conf --driver-map    # w
 To change a single mapping, or add a field:
 
 ```ini
-[EcowittHttp]
+[EcowittGateway]
     [[field_map_extensions]]
         extraTemp9 = ch_temp.1.temp     # WN34 channel 1 in a spare extraTemp field
 ```
@@ -296,12 +315,12 @@ each install type.
 
 | Symptom | What to check |
 |---|---|
-| `device IP address cannot be None` | Set `ip_address` in `[EcowittHttp]`. |
+| `device IP address cannot be None` | Set `ip_address` in `[EcowittGateway]`. |
 | `Unable to obtain live sensor data` / `DeviceIOError` | Check the IP address and that the gateway is powered on and on the network. Try opening `http://<ip>/get_livedata_info` in a browser. |
 | WeeWX exits at start-up when the gateway is offline | Set `loop_on_init = 1`. |
 | Rain is double-counted | Remove the `[StdWXCalculate] [[Delta]] [[[rain]]]` entry, and don't run the driver and the service at the same time. |
 | A sensor is missing from packets | Run `weectl device --sensors`. `sensor is registering...` means the gateway hasn't paired with it yet. |
-| Need more detail in the log | Add `debug = loop` (or another debug option) to `[EcowittHttp]`, or set `debug = 1` at the top of `weewx.conf`. |
+| Need more detail in the log | Add `debug = loop` (or another debug option) to `[EcowittGateway]`, or set `debug = 1` at the top of `weewx.conf`. |
 
 Logs:
 
@@ -314,8 +333,8 @@ Logs:
 
 See **[VERSIONING.md](VERSIONING.md)**. In brief:
 
-- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b1`);
-- the current release is the first beta;
+- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b3`);
+- the current release is the third beta;
 - configuration compatibility with `ecowitt_http.py` is kept throughout 0.x.
 
 ---

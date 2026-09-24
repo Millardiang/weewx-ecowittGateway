@@ -16,33 +16,40 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Install with:
-    weectl extension install weewx-EcowittGateway.zip      (WeeWX 5)
-    wee_extension --install=weewx-EcowittGateway.zip       (WeeWX 4)
-then select and configure the driver with:
-    weectl station reconfigure --driver=user.weewx-EcowittGateway
+Requires WeeWX 5.4.0 or later. Install with:
+    weectl extension install weewx-EcowittGateway-<version>.zip
+
+The installer asks for the gateway settings and writes them to weewx.conf,
+with the [EcowittGateway] section placed directly after [Station]. Settings
+in an [EcowittHttp] section (earlier versions, or ecowitt_http.py) are moved
+to [EcowittGateway]. When run without a terminal (for example from a script)
+it uses the defaults or the existing settings.
 """
 
 import io
+import json
+import re
+import sys
+import urllib.request
 
 import configobj
 import weewx
 
-try:
-    from weecfg.extension import ExtensionInstaller     # WeeWX 5
-except ImportError:
-    from setup import ExtensionInstaller                # WeeWX 4
+from weecfg.extension import ExtensionInstaller
 
-VERSION = '0.0.1b1'
+VERSION = '0.0.1b3'
 MODULE = 'weewx-EcowittGateway'
-REQUIRED_WEEWX = 4
+SECTION = 'EcowittGateway'
+LEGACY_SECTION = 'EcowittHttp'
+SERVICE = f'user.{MODULE}.EcowittHttpService'
+MIN_WEEWX_VERSION = (5, 4, 0)
 
 
 def _rng(fmt, n, start=1):
     return [fmt.format(i) for i in range(start, n + 1)]
 
 
-# accumulator extractor: fields (as used by the driver's config editor)
+# accumulator extractor: fields
 EXTRACTORS = {
     'sum': ['lightning_strike_count', 'lightning_noise_count', 't_rain', 'p_rain', 'hail'],
     'max': ['rainRate', 'rrain_piezo', 'p_rainrate'],
@@ -61,7 +68,7 @@ EXTRACTORS = {
 FIRSTLAST = ('model', 'stationtype', 'apName')
 
 DRIVER_CONFIG = f"""
-[EcowittHttp]
+[{SECTION}]
     # This section is for the weewx-EcowittGateway driver/service.
 
     # the driver to use
@@ -79,13 +86,35 @@ DRIVER_CONFIG = f"""
     # max wait for device to respond to a HTTP request (seconds)
     url_timeout = 10
 
+    # which gauge feeds the WeeWX 'rain' and 'rainRate' fields: tipping or piezo
+    rain_source = tipping
+
     # whether to show battery state data for sensors with no signal
     show_all_batt = False
     # whether to log unknown API fields at the info level
     log_unknown_fields = False
     # how often to check for device firmware updates (seconds), 0 disables
     firmware_update_check_interval = 86400
+
+    # Ecowitt.net keys, only needed for catchup from Ecowitt.net
+    api_key = ""
+    app_key = ""
+
+    # where to fetch missed data from at startup: either, device, net or none
+    [[catchup]]
+        source = either
+        grace = 0
+        retries = 3
 """
+
+TIPPING_MODELS = ('wh40', 'wh69', 'wn20')
+PIEZO_MODELS = ('ws85', 'ws90', 'wh85', 'wh90')
+
+
+def _version_tuple(version):
+    """'5.4.0', '5.5.2b1' -> (5, 4, 0), (5, 5, 2)"""
+    return tuple(int(re.match(r'\d+', part).group()) if re.match(r'\d+', part) else 0
+                 for part in version.split('.')[:3])
 
 
 def loader():
@@ -94,9 +123,10 @@ def loader():
 
 class EcowittGatewayInstaller(ExtensionInstaller):
     def __init__(self):
-        if int(weewx.__version__.split('.')[0]) < REQUIRED_WEEWX:
-            raise weewx.UnsupportedFeature(f'WeeWX {REQUIRED_WEEWX} or later is required, '
-                                           f'found {weewx.__version__}')
+        if _version_tuple(weewx.__version__) < MIN_WEEWX_VERSION:
+            raise weewx.UnsupportedFeature(f"weewx-EcowittGateway requires WeeWX "
+                                           f"{'.'.join(map(str, MIN_WEEWX_VERSION))} or later, "
+                                           f"found {weewx.__version__}")
         config = configobj.ConfigObj(io.StringIO(DRIVER_CONFIG))
         accum = {f: {'extractor': x} for x, fields in EXTRACTORS.items() for f in fields}
         for f in FIRSTLAST:
@@ -110,16 +140,234 @@ class EcowittGatewayInstaller(ExtensionInstaller):
             author_email='',
             files=[('bin/user', [f'bin/user/{MODULE}.py'])],
             config=config,
+            # declared so 'weectl extension uninstall' removes it; configure() keeps it only in service mode
+            data_services=SERVICE,
         )
 
+    # -- helpers ---------------------------------------------------------------
+
+    def _out(self, engine, msg=''):
+        printer = getattr(engine, 'printer', None)
+        if printer is not None:
+            printer.out(msg)
+        else:
+            print(msg)
+
+    @staticmethod
+    def _interactive():
+        return sys.stdin is not None and sys.stdin.isatty()
+
+    def _ask(self, prompt, default, options=None):
+        """Prompt for a value; returns the default when there is no terminal."""
+        if not self._interactive():
+            return default
+        opts = f" ({'/'.join(options)})" if options else ''
+        while True:
+            answer = input(f'{prompt}{opts} [{default}]: ').strip() or str(default)
+            if options is None or answer.lower() in options:
+                return answer.lower() if options else answer
+            print(f"    Please enter one of: {', '.join(options)}")
+
+    def _ask_yes(self, prompt, default=True):
+        return self._ask(prompt, 'y' if default else 'n', ['y', 'n']) == 'y'
+
+    @staticmethod
+    def _get_json(ip, command, **params):
+        query = '&'.join(f'{k}={v}' for k, v in params.items())
+        with urllib.request.urlopen(f'http://{ip}/{command}?{query}', timeout=5) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+
+    def _probe(self, ip):
+        """Return (model, set of paired gauge types) or (None, None) if unreachable."""
+        try:
+            version = self._get_json(ip, 'get_version').get('version', '')
+        except Exception:
+            return None, None
+        gauges = set()
+        try:
+            for page in range(1, 6):
+                sensors = self._get_json(ip, 'get_sensors_info', page=page)
+                if not sensors:
+                    break
+                for sensor in sensors:
+                    if str(sensor.get('id', '')).lower() in ('fffffffe', 'ffffffff'):
+                        continue
+                    img = str(sensor.get('img', '')).lower()
+                    if img in TIPPING_MODELS:
+                        gauges.add('tipping')
+                    elif img in PIEZO_MODELS:
+                        gauges.add('piezo')
+        except Exception:
+            pass
+        return version[8:].strip() or 'unknown model', gauges
+
+    @staticmethod
+    def _place_after_station(config_dict):
+        """Move the driver section so it directly follows [Station]."""
+        sections = config_dict.sections
+        if SECTION in sections and 'Station' in sections:
+            sections.remove(SECTION)
+            sections.insert(sections.index('Station') + 1, SECTION)
+
+    # -- configuration -------------------------------------------------------
+
     def configure(self, engine):
-        """Tell the user how to finish setting up; existing settings are never changed."""
-        engine.printer.out('')
-        engine.printer.out('weewx-EcowittGateway installed. To use it as the station driver run:')
-        engine.printer.out(f'    weectl station reconfigure --driver=user.{MODULE}')
-        engine.printer.out('This sets the gateway IP address and poll interval, rain gauge handling,')
-        engine.printer.out("software record generation and 'loop_on_init'.")
-        engine.printer.out('To use it as a service instead, set ip_address in [EcowittHttp] and add')
-        engine.printer.out(f'    user.{MODULE}.EcowittHttpService')
-        engine.printer.out('to data_services in [Engine] [[Services]].')
-        return False
+        config_dict = engine.config_dict
+        legacy = SECTION not in config_dict and LEGACY_SECTION in config_dict
+        existing = config_dict.get(LEGACY_SECTION if legacy else SECTION, {})
+
+        def out(msg=''):
+            self._out(engine, msg)
+
+        out()
+        out('Configuring weewx-EcowittGateway')
+        out('Press Enter to accept the value shown in [brackets].')
+        out()
+        if legacy:
+            out(f'Existing [{LEGACY_SECTION}] settings found; they will be moved to [{SECTION}].')
+            out()
+
+        # gateway address, checked by contacting the device
+        ip = existing.get('ip_address', 'replace_me')
+        model = gauges = None
+        while True:
+            ip = self._ask('Gateway IP address, eg 192.168.1.100', ip)
+            if ip == 'replace_me' or not self._interactive():
+                break
+            model, gauges = self._probe(ip)
+            if model:
+                out(f'    Found {model} at {ip}')
+                break
+            out(f'    No response from a gateway at {ip}.')
+            if self._ask_yes('    Use this address anyway?', default=False):
+                break
+        poll = self._ask('Poll interval in seconds', existing.get('poll_interval', 20))
+
+        station_type = config_dict.get('Station', {}).get('station_type')
+        if station_type in (SECTION, LEGACY_SECTION):
+            default_mode = 'driver'
+        elif existing.get('ip_address', 'replace_me') != 'replace_me':
+            default_mode = 'service'
+        else:
+            default_mode = 'driver' if self._interactive() else 'skip'
+        mode = self._ask('Use as the station driver, as a service alongside another driver, or skip',
+                         default_mode, ['driver', 'service', 'skip'])
+        if mode == 'driver' and ip == 'replace_me':
+            out('    No gateway IP address given, so the station driver is not being changed.')
+            mode = 'skip'
+
+        rain_source = existing.get('rain_source', 'tipping')
+        if mode == 'driver':
+            if gauges:
+                out(f"    Paired rain gauges: {' and '.join(sorted(gauges))}")
+            if gauges == {'piezo'}:
+                rain_source = 'piezo'
+            elif gauges != {'tipping'}:
+                rain_source = self._ask("Which gauge should feed WeeWX 'rain' and 'rainRate'",
+                                        rain_source, ['tipping', 'piezo'])
+            else:
+                rain_source = 'tipping'
+
+        catchup = existing.get('catchup', {}).get('source', 'either')
+        catchup = self._ask('Fetch missed data at startup from', catchup, ['either', 'device', 'net', 'none'])
+        api_key, app_key = existing.get('api_key', ''), existing.get('app_key', '')
+        if catchup in ('either', 'net') and self._interactive():
+            out('    Ecowitt.net keys are only needed to fetch missed data from Ecowitt.net')
+            out('    (press Enter to leave them blank).')
+            api_key = self._ask('    Ecowitt.net API key', api_key or '')
+            app_key = self._ask('    Ecowitt.net application key', app_key or '')
+        show_batt = self._ask_yes('Show battery state for sensors with no signal?',
+                                  str(existing.get('show_all_batt', 'False')).lower() == 'true')
+        loop_on_init = mode != 'driver' or self._ask_yes(
+            'Keep retrying at startup if the gateway cannot be reached (loop_on_init)?', True)
+
+        if getattr(engine, 'dry_run', False):
+            out('Dry run: weewx.conf not changed.')
+            return False
+        if mode != 'service':
+            self._remove_service(config_dict)
+
+        # driver section: create it after [Station] with all defaults, then apply the answers
+        template = configobj.ConfigObj(io.StringIO(DRIVER_CONFIG))
+        if legacy:
+            # move the old section's settings (and comments) to the new section name
+            config_dict[SECTION] = {}
+            config_dict.comments[SECTION] = config_dict.comments.get(LEGACY_SECTION, [''])
+            _copy_section(config_dict[LEGACY_SECTION], config_dict[SECTION])
+            config_dict[SECTION]['driver'] = f'user.{MODULE}'
+            del config_dict[LEGACY_SECTION]
+            if config_dict.get('Station', {}).get('station_type') == LEGACY_SECTION:
+                config_dict['Station']['station_type'] = SECTION
+        if SECTION not in config_dict:
+            config_dict[SECTION] = {}
+            config_dict.comments[SECTION] = template.comments[SECTION] or ['']
+        self._place_after_station(config_dict)
+        _merge_missing(config_dict, template)
+        section = config_dict[SECTION]
+        section.update({'ip_address': ip, 'poll_interval': str(poll), 'rain_source': rain_source,
+                        'show_all_batt': str(show_batt), 'api_key': api_key, 'app_key': app_key})
+        section['catchup']['source'] = catchup
+
+        if mode == 'driver':
+            config_dict.setdefault('Station', {})['station_type'] = SECTION
+            config_dict['loop_on_init'] = '1' if loop_on_init else '0'
+            config_dict.setdefault('StdArchive', {})['record_generation'] = 'software'
+            calc = config_dict.setdefault('StdWXCalculate', {})
+            calc.setdefault('Calculations', {})['rain'] = 'prefer_hardware'
+            if 'rain' in calc.get('Delta', {}):
+                calc['Delta'].pop('rain')
+                if not calc['Delta']:
+                    calc.pop('Delta')
+            out()
+            out(f'Station driver set to {SECTION} (user.{MODULE}); archive records generated in software.')
+        elif mode == 'service':
+            services = config_dict.setdefault('Engine', {}).setdefault('Services', {})
+            data_services = _as_list(services.get('data_services', []))
+            if SERVICE not in data_services:
+                services['data_services'] = data_services + [SERVICE]
+            out()
+            out(f'Added {SERVICE} to data_services.')
+        else:
+            out()
+            out('Gateway settings saved; the station driver and services were not changed.')
+        out('Restart WeeWX to start using the new settings.')
+        return True
+
+    @staticmethod
+    def _remove_service(config_dict):
+        services = config_dict.get('Engine', {}).get('Services', {})
+        if 'data_services' in services:
+            data_services = _as_list(services['data_services'])
+            if SERVICE in data_services:
+                services['data_services'] = [s for s in data_services if s != SERVICE]
+
+
+def _as_list(value):
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(',') if v.strip()]
+    return list(value or [])
+
+
+def _copy_section(source, target):
+    """Copy all keys, subsections and comments from one ConfigObj section to another."""
+    for key in source.scalars:
+        target[key] = source[key]
+    for key in source.sections:
+        target[key] = {}
+        _copy_section(source[key], target[key])
+    for key in source.scalars + source.sections:
+        target.comments[key] = source.comments.get(key, [])
+        target.inline_comments[key] = source.inline_comments.get(key)
+
+
+def _merge_missing(target, source):
+    """Add keys (with their comments) from source that are missing in target."""
+    for key in source:
+        if isinstance(source[key], dict):
+            if key not in target:
+                target[key] = {}
+                target.comments[key] = source.comments.get(key, [])
+            _merge_missing(target[key], source[key])
+        elif key not in target:
+            target[key] = source[key]
+            target.comments[key] = source.comments.get(key, [])

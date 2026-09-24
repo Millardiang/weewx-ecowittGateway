@@ -1,11 +1,14 @@
 # Installing weewx-EcowittGateway
 
-Instructions for WeeWX 5 installed from the **Debian/apt package** or with **pip**, and for
-**WeeWX 4**. Each section covers a new install, switching from `ecowitt_http.py`, upgrading and
-removal.
+Instructions for WeeWX 5.4.0 or later, installed from the **Debian/apt package** or with **pip**.
+Each section covers a new install, switching from `ecowitt_http.py`, upgrading and removal.
 
-In the examples, replace `192.168.1.100` with your gateway's IP address. You can find it in the
-WSView Plus app, on your router, or with the `--discover` tool described at the end.
+The installer stops with an error on older WeeWX versions. Check yours with `weectl --version`, and
+upgrade WeeWX first if it's older than 5.4.0.
+
+The installer asks for your settings and writes them to `weewx.conf`, so nothing needs editing by
+hand. In the examples, replace `192.168.1.100` with your gateway's IP address. You can find it in
+the WSView Plus app, on your router, or with the `--discover` tool described at the end.
 
 ---
 
@@ -23,6 +26,49 @@ WSView Plus app, on your router, or with the `--discover` tool described at the 
 
 ---
 
+## What the installer asks
+
+Press Enter to accept the value in [brackets].
+
+```
+Configuring weewx-EcowittGateway
+Press Enter to accept the value shown in [brackets].
+
+Gateway IP address, eg 192.168.1.100 [replace_me]: 192.168.1.100
+    Found GW2000A_V3.1.2 at 192.168.1.100
+Poll interval in seconds [20]:
+Use as the station driver, as a service alongside another driver, or skip (driver/service/skip) [driver]:
+    Paired rain gauges: piezo and tipping
+Which gauge should feed WeeWX 'rain' and 'rainRate' (tipping/piezo) [tipping]:
+Fetch missed data at startup from (either/device/net/none) [either]:
+    Ecowitt.net keys are only needed to fetch missed data from Ecowitt.net
+    (press Enter to leave them blank).
+    Ecowitt.net API key []:
+    Ecowitt.net application key []:
+Show battery state for sensors with no signal? (y/n) [n]:
+Keep retrying at startup if the gateway cannot be reached (loop_on_init)? (y/n) [y]:
+```
+
+- **IP address:** the installer contacts the gateway to check the address. If there's no answer,
+  it asks whether to use the address anyway or try another.
+- **Rain gauges:** the installer reads which gauges are paired. It only asks which one feeds WeeWX's
+  `rain`/`rainRate` when both types are paired.
+- **driver:** makes the gateway your station. The installer sets `station_type`, software archive
+  records, `loop_on_init` and the rain calculation settings.
+- **service:** adds gateway data to another driver's loop packets. Your `station_type` is left alone.
+- **skip:** only saves the gateway settings.
+
+The `[EcowittGateway]` section is written directly after `[Station]`. When re-run, for example for an
+upgrade, the installer offers your current settings as the defaults.
+
+Upgrading from 0.0.1b1/b2 or switching from `ecowitt_http.py`: settings in an `[EcowittHttp]` section
+are moved to `[EcowittGateway]`, and `station_type = EcowittHttp` becomes `station_type = EcowittGateway`.
+
+If the installer is run without a terminal (for example from a script), it doesn't ask anything.
+It saves the default settings with `ip_address = replace_me` and doesn't change the station driver.
+
+---
+
 ## A. WeeWX 5 – Debian / Ubuntu / Raspberry Pi OS (apt package)
 
 | Item | Location |
@@ -35,16 +81,13 @@ WSView Plus app, on your router, or with the `--discover` tool described at the 
 ### New install
 
 ```bash
-# 1. Install the extension
-sudo weectl extension install weewx-EcowittGateway.zip
+# 1. Install the extension and answer the prompts
+sudo weectl extension install weewx-EcowittGateway-0.0.1b3.zip
 
-# 2. Select and configure the driver (asks for IP address, poll interval and rain gauges)
-sudo weectl station reconfigure --driver=user.weewx-EcowittGateway
-
-# 3. Check it can talk to the gateway
+# 2. Check it can talk to the gateway
 sudo weectl device --live-data
 
-# 4. Restart WeeWX and watch the log
+# 3. Restart WeeWX and watch the log
 sudo systemctl restart weewx
 sudo journalctl -u weewx -f
 ```
@@ -52,7 +95,7 @@ sudo journalctl -u weewx -f
 When it's working, the log shows lines like:
 
 ```
-EcowittHttpDriver: version is 0.0.1b1
+EcowittHttpDriver: version is 0.0.1b3
      device IP address is 192.168.1.100
 EcowittHttpCollector startup
 Using 'rain.0x13.val' for rain total
@@ -64,15 +107,13 @@ Using 'rain.0x13.val' for rain total
 sudo systemctl stop weewx
 sudo weectl extension list                       # note the old extension's name
 sudo weectl extension uninstall <old-name>       # or delete /etc/weewx/bin/user/ecowitt_http.py
-sudo weectl extension install weewx-EcowittGateway.zip
-sudo nano /etc/weewx/weewx.conf                  # in [EcowittHttp] change: driver = user.weewx-EcowittGateway
+sudo weectl extension install weewx-EcowittGateway-0.0.1b3.zip
 sudo systemctl start weewx
 ```
 
-Your existing `[EcowittHttp]` settings, field map and database work unchanged.
-
-Uninstalling the old extension may remove its `[EcowittHttp]` section. If it does, run step 2 of the
-new install instead of editing by hand.
+If `weewx.conf` still has an `[EcowittHttp]` section, the installer moves its settings to
+`[EcowittGateway]`, including any custom field map, and updates `station_type` to match. The
+database needs no changes.
 
 ### Upgrading to a newer version of this driver
 
@@ -81,18 +122,27 @@ sudo weectl extension install weewx-EcowittGateway-<new-version>.zip
 sudo systemctl restart weewx
 ```
 
-Your settings are kept, because the installer only adds settings that are missing.
+Press Enter at each prompt to keep your current settings.
 
 ### Removing
 
 ```bash
 sudo weectl extension uninstall weewx-EcowittGateway
-sudo weectl station reconfigure        # choose another driver, e.g. Simulator
+sudo weectl station reconfigure        # driver mode only: choose another driver, e.g. Simulator
 sudo systemctl restart weewx
 ```
 
-This also removes the `[EcowittHttp]` section, including any settings you changed there. Back it up
-first if you might reinstall.
+The uninstall removes:
+
+- the driver file;
+- the `[EcowittGateway]` section;
+- the accumulator entries;
+- the service entry, if you used service mode.
+
+Any settings you added yourself, such as `[[field_map_extensions]]`, are left in place.
+
+WeeWX's uninstaller can't change `station_type`. If you used driver mode, run
+`weectl station reconfigure` as shown to choose another driver before restarting.
 
 ---
 
@@ -116,19 +166,16 @@ source ~/weewx-venv/bin/activate
 ```bash
 source ~/weewx-venv/bin/activate
 
-# 1. Install the extension
-weectl extension install weewx-EcowittGateway.zip
+# 1. Install the extension and answer the prompts
+weectl extension install weewx-EcowittGateway-0.0.1b3.zip
 
-# 2. Select and configure the driver
-weectl station reconfigure --driver=user.weewx-EcowittGateway
-
-# 3. Check it can talk to the gateway
+# 2. Check it can talk to the gateway
 weectl device --live-data
 
-# 4a. Running WeeWX in a terminal: stop it with Ctrl-C and start it again
+# 3a. Running WeeWX in a terminal: stop it with Ctrl-C and start it again
 weewxd
 
-# 4b. Running WeeWX as a daemon (set up with ~/weewx-data/scripts/setup-daemon.sh)
+# 3b. Running WeeWX as a daemon (set up with ~/weewx-data/scripts/setup-daemon.sh)
 sudo systemctl restart weewx
 ```
 
@@ -142,8 +189,7 @@ source ~/weewx-venv/bin/activate
 sudo systemctl stop weewx                        # or stop weewxd
 weectl extension list
 weectl extension uninstall <old-name>            # or delete ~/weewx-data/bin/user/ecowitt_http.py
-weectl extension install weewx-EcowittGateway.zip
-nano ~/weewx-data/weewx.conf                     # in [EcowittHttp] change: driver = user.weewx-EcowittGateway
+weectl extension install weewx-EcowittGateway-0.0.1b3.zip
 sudo systemctl start weewx
 ```
 
@@ -153,38 +199,30 @@ These are the same as the Debian instructions above, without `sudo` on the `weec
 
 ---
 
-## C. WeeWX 4 (deb package or setup.py install)
+## Changing settings later
 
-WeeWX 4 uses the older `wee_*` utilities.
+Run the installer again and change the answers, or edit `[EcowittGateway]` in `weewx.conf` directly.
+See the README for every option. Restart WeeWX after either.
 
-| Item | deb package | setup.py install |
-|---|---|---|
-| Configuration | `/etc/weewx/weewx.conf` | `/home/weewx/weewx.conf` |
-| User extensions | `/usr/share/weewx/user/` | `/home/weewx/bin/user/` |
-
-```bash
-sudo wee_extension --install=weewx-EcowittGateway.zip
-sudo wee_config --reconfigure --driver=user.weewx-EcowittGateway
-sudo systemctl restart weewx
-```
-
-`wee_device` works in the same way as `weectl device`, for example `sudo wee_device --live-data`.
+`weectl station reconfigure --driver=user.weewx-EcowittGateway` also works. It asks the same rain
+gauge questions, as part of WeeWX's full station set-up.
 
 ---
 
 ## Manual install (without the installer)
 
 1. Copy `bin/user/weewx-EcowittGateway.py` into your user directory (see the tables above).
-2. Add at least this to `weewx.conf`:
+2. Add this to `weewx.conf`, with `[EcowittGateway]` directly after `[Station]`:
    ```ini
    loop_on_init = 1
 
    [Station]
-       station_type = EcowittHttp
+       station_type = EcowittGateway
 
-   [EcowittHttp]
+   [EcowittGateway]
        driver = user.weewx-EcowittGateway
        ip_address = 192.168.1.100
+       rain_source = tipping
 
    [StdArchive]
        record_generation = software
@@ -195,32 +233,14 @@ sudo systemctl restart weewx
    ```
 3. Remove any `[StdWXCalculate] [[Delta]] [[[rain]]]` entry, then restart WeeWX.
 
-Run `weectl station reconfigure --driver=user.weewx-EcowittGateway` if you also want the
-`[Accumulator]` entries and the rain gauge set-up.
-
----
-
-## Running as a service instead of a driver
-
-Install the extension (step 1 only, skip `reconfigure`), then edit `weewx.conf`:
-
-```ini
-[EcowittHttp]
-    ip_address = 192.168.1.100
-
-[Engine]
-    [[Services]]
-        data_services = user.weewx-EcowittGateway.EcowittHttpService
-```
-
-Leave `station_type` set to your existing driver and restart WeeWX. See the README for the
-service options.
+For service mode, leave `station_type` alone and add
+`user.weewx-EcowittGateway.EcowittHttpService` to `data_services` under `[Engine] [[Services]]`.
 
 ---
 
 ## Running the command-line tools
 
-`weectl device …` (WeeWX 5) or `wee_device …` (WeeWX 4) covers most needs.
+`weectl device …` covers most needs.
 
 The extra tools (`--discover`, `--test-driver`, `--test-service`, `--weewx-fields`, `--default-map`,
 `--driver-map`, `--service-map`) need the module to be run directly:

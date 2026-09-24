@@ -8,6 +8,67 @@ follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 Nothing yet.
 
+## [0.0.1b3] – 24 September 2026 — third beta
+
+### Changed
+
+- **The driver name is now `EcowittGateway`** (it was `EcowittHttp`). The `weewx.conf` section is now
+  `[EcowittGateway]`, with `station_type = EcowittGateway`.
+  - The installer moves the settings from an existing `[EcowittHttp]` section (from earlier betas or
+    `ecowitt_http.py`) into the new section, keeping custom settings and comments, and updates
+    `station_type`.
+  - If there's no `[EcowittGateway]` section, the driver, service and command-line tools still read
+    `[EcowittHttp]`.
+  - Class names such as `EcowittHttpService` are unchanged, so service entries keep working.
+- **WeeWX 5.4.0 or later is now required.** The driver and the installer both stop with a clear
+  error on older versions. WeeWX 4 support and the WeeWX 4 instructions have been removed.
+
+## [0.0.1b2] – 24 September 2026 — second beta
+
+Changes from testing the first install.
+
+### Added
+
+- **Interactive installer.** `weectl extension install` now asks for:
+  - the gateway IP address, checked by contacting the gateway;
+  - the poll interval;
+  - driver, service or skip;
+  - which rain gauge feeds WeeWX (only asked if both types are paired; the paired gauges are
+    detected automatically);
+  - the catchup source and Ecowitt.net keys;
+  - battery display;
+  - `loop_on_init`.
+
+  It writes the answers to `weewx.conf`, so nothing needs editing by hand.
+- **Driver mode set-up.** The installer also sets `station_type`, software archive records and the
+  rain calculation settings. The separate `weectl station reconfigure` step is no longer needed.
+- **Service mode set-up.** The installer adds the service to `data_services`, and uninstalling
+  removes it again.
+- **Re-running the installer** (for example for an upgrade) offers the current settings as defaults.
+  Without a terminal it asks nothing and leaves the station driver unchanged.
+- **New `rain_source` option** (`tipping` or `piezo`). It chooses which gauge feeds WeeWX's `rain`
+  and `rainRate` fields, in both live data and catchup.
+- **New `[[catchup]] source = none`**, to turn off fetching missed data.
+
+### Changed
+
+- The `[EcowittHttp]` section is now placed directly after `[Station]` in `weewx.conf`.
+- `weectl station reconfigure` now sets `rain_source` instead of adding a `rainRate` field-map entry.
+- Blank `api_key`/`app_key` values are treated as not set.
+
+### Fixed
+
+- Choosing the piezo gauge for WeeWX rain had no effect: `rain` always came from the tipping gauge.
+- `weectl station reconfigure` could leave a `[[Delta]] rain` entry, so WeeWX could calculate rain a
+  second time.
+- With a tipping gauge selected, `weectl station reconfigure` removed the `rain = prefer_hardware`
+  setting it had just added.
+
+### Known limitations
+
+- The installer prompts have been tested with WeeWX 5.5. They are written to also work with
+  WeeWX 4's `wee_extension`, but that hasn't been tested yet.
+
 ## [0.0.1b1] – 24 September 2026 — first beta
 
 First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary Roderick's
@@ -112,4 +173,6 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
 [Unreleased]: #unreleased
+[0.0.1b3]: #001b3--24-september-2026--third-beta
+[0.0.1b2]: #001b2--24-september-2026--second-beta
 [0.0.1b1]: #001b1--24-september-2026--first-beta

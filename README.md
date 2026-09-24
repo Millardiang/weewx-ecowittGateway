@@ -4,7 +4,7 @@ A [WeeWX](https://weewx.com) driver and service for Ecowitt gateways and console
 **local HTTP API**. There's no cloud dependency for live data, and the gateway doesn't need any
 custom-server or upload configuration.
 
-**Version:** 0.0.1 beta 4 (`0.0.1b4`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
+**Version:** 0.0.1 beta 5 (`0.0.1b5`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
 
 This is a compact rewrite of `ecowitt_http.py`. It keeps the same
 configuration, field names and command-line tools, fixes a number of bugs and is about 80% smaller.
@@ -20,6 +20,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 - [Configuration](#configuration)
 - [Running as a service](#running-as-a-service)
 - [Rain and lightning](#rain-and-lightning)
+- [Loop data file (ecwLoop.json)](#loop-data-file-ecwloopjson)
 - [Catchup (missed data)](#catchup-missed-data)
 - [Field mapping](#field-mapping)
 - [Command-line tools](#command-line-tools)
@@ -90,7 +91,7 @@ WeeWX 5.4.0 or later.
 In short:
 
 ```bash
-weectl extension install weewx-EcowittGateway-0.0.1b4.zip
+weectl extension install weewx-EcowittGateway-0.0.1b5.zip
 sudo systemctl restart weewx
 ```
 
@@ -107,6 +108,7 @@ The installer asks for your settings, so there's nothing to edit in `weewx.conf`
 | Where to fetch missed data from at start-up, and Ecowitt.net keys if needed | either |
 | Show battery state for sensors with no signal | no |
 | Keep retrying at start-up if the gateway can't be reached (`loop_on_init`) | yes |
+| Write each loop packet to `ecwLoop.json`, where (web / data / tmp / custom) and in which units | no |
 
 The `[EcowittGateway]` section is placed directly after `[Station]`. Re-running the installer (for
 example for an upgrade) offers your current settings as the defaults.
@@ -147,6 +149,7 @@ earlier betas) if there is no `[EcowittGateway]` section; the installer moves it
 | `wn32_outdoor` | `False` | Report WH26 battery/signal as an outdoor WN32P instead. |
 | `debug` | *(none)* | Comma-separated list of extra logging: `rain`, `raindelta`, `wind`, `lightning`, `loop`, `sensors`, `parser`, `catchup`, `collector`, `archive`. |
 | `api_key`, `app_key` | *(none)* | Ecowitt.net keys; only needed for Ecowitt.net catchup. |
+| `[[loop_json]]` | | Write each loop packet to `ecwLoop.json`. See [Loop data file](#loop-data-file-ecwloopjson). |
 | `[[catchup]]` | | See [Catchup](#catchup-missed-data). |
 | `[[field_map]]` | | Replaces the default field map completely (advanced). |
 | `[[field_map_extensions]]` | | Adds to or overrides individual entries in the default field map. |
@@ -192,6 +195,60 @@ In service mode:
 - per-period rain is written only to `t_rain` (tipping) and `p_rain` (piezo), not `rain`/`hail`, so
   the main driver's rain isn't counted twice;
 - values are converted to the packet's unit system.
+
+---
+
+## Loop data file (ecwLoop.json)
+
+The driver can write every loop packet to a JSON file, for example to feed a live web page or a
+script. The file is replaced each time, typically every `poll_interval` seconds. It is written to a
+temporary file and then renamed, so a reader never sees a half-written file.
+
+```ini
+[EcowittGateway]
+    [[loop_json]]
+        enable = True
+        path = ecwLoop.json     # see the table below
+        units = native          # native | us | metric | metricwx
+```
+
+| `path` | Written to |
+|---|---|
+| `ecwLoop.json` (the default) or any relative path | the WeeWX web pages folder (`HTML_ROOT`), e.g. `~/weewx-data/public_html/ecwLoop.json` or `/var/www/html/weewx/ecwLoop.json` |
+| an absolute file path, e.g. `/home/pi/weewx-data/ecwLoop.json` | that file |
+| a folder, e.g. `/tmp/` | `ecwLoop.json` in that folder |
+
+The installer offers four locations:
+
+- **web:** the WeeWX web pages folder.
+- **data:** the WeeWX data folder (`WEEWX_ROOT`).
+- **tmp:** `/tmp/ecwLoop.json`. `/tmp` is often held in memory, which saves SD card writes on a
+  Raspberry Pi.
+- **custom:** a folder or file path of your choice.
+
+The folder must exist and be writable by the user WeeWX runs as. If a write fails, the error is
+logged once, and again when writing starts working.
+
+`units` sets the unit system of the values:
+
+- `native` (the default): the loop packet's own units, METRICWX for the driver or the main driver's
+  units in service mode.
+- `us`, `metric` or `metricwx`: converted to that system.
+
+The file's `usUnits` field says which system was used.
+
+The file contains every field in the loop packet, using WeeWX field names. Missing and invalid values
+are written as `null`. For example:
+
+```json
+{"barometer": 1013.0, "dateTime": 1790208781, "outHumidity": 61, "outTemp": 22.8, "rain": 0.3,
+ "rainRate": 0.6, "usUnits": 17, "windDir": 174, "windGust": 2.9, "windSpeed": 1.8, "...": "..."}
+```
+
+In service mode the file holds the full augmented packet: the main driver's fields plus the gateway's.
+
+> On systems where WeeWX runs under systemd with `PrivateTmp=true`, other programs can't see files
+> WeeWX writes to `/tmp`. Use the web folder or another folder instead.
 
 ---
 
@@ -341,8 +398,8 @@ Logs:
 
 See **[VERSIONING.md](VERSIONING.md)**. In brief:
 
-- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b4`);
-- the current release is the fourth beta;
+- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b5`);
+- the current release is the fifth beta;
 - configuration compatibility with `ecowitt_http.py` is kept throughout 0.x.
 
 ---

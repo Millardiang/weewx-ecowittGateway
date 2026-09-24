@@ -50,6 +50,13 @@ Fetch missed data at startup from (either/device/net/none) [either]:
     Ecowitt.net application key []:
 Show battery state for sensors with no signal? (y/n) [n]:
 Keep retrying at startup if the gateway cannot be reached (loop_on_init)? (y/n) [y]:
+Write each loop packet to ecwLoop.json (for web pages and scripts)? (y/n) [n]: y
+    web    = WeeWX web pages folder: /home/pi/weewx-data/public_html/ecwLoop.json
+    data   = WeeWX data folder: /home/pi/weewx-data/ecwLoop.json
+    tmp    = /tmp/ecwLoop.json (often held in memory, which saves SD card writes)
+    custom = a folder or file path of your choice
+Where should ecwLoop.json be written (web/data/tmp/custom) [web]:
+Units for ecwLoop.json (native/us/metric/metricwx) [native]:
 ```
 
 - **IP address:** the installer contacts the gateway to check the address. If there's no answer,
@@ -63,6 +70,8 @@ Keep retrying at startup if the gateway cannot be reached (loop_on_init)? (y/n) 
   records, `loop_on_init` and the rain calculation settings.
 - **service:** adds gateway data to another driver's loop packets. Your `station_type` is left alone.
 - **skip:** only saves the gateway settings.
+- **ecwLoop.json:** optional. Writes every loop packet to a JSON file for live web pages or
+  scripts, in the location and units you choose. See the README for details.
 
 The `[EcowittGateway]` section is written directly after `[Station]`. When re-run, for example for an
 upgrade, the installer offers your current settings as the defaults.
@@ -88,7 +97,7 @@ It saves the default settings with `ip_address = replace_me` and doesn't change 
 
 ```bash
 # 1. Install the extension and answer the prompts
-sudo weectl extension install weewx-EcowittGateway-0.0.1b4.zip
+sudo weectl extension install weewx-EcowittGateway-0.0.1b5.zip
 
 # 2. Check it can talk to the gateway
 sudo weectl device --live-data
@@ -101,7 +110,7 @@ sudo journalctl -u weewx -f
 When it's working, the log shows lines like:
 
 ```
-EcowittHttpDriver: version is 0.0.1b4
+EcowittHttpDriver: version is 0.0.1b5
      device IP address is 192.168.1.100
 EcowittHttpCollector startup
 Using 'rain.0x13.val' for rain total
@@ -113,7 +122,7 @@ Using 'rain.0x13.val' for rain total
 sudo systemctl stop weewx
 sudo weectl extension list                       # note the old extension's name
 sudo weectl extension uninstall <old-name>       # or delete /etc/weewx/bin/user/ecowitt_http.py
-sudo weectl extension install weewx-EcowittGateway-0.0.1b4.zip
+sudo weectl extension install weewx-EcowittGateway-0.0.1b5.zip
 sudo systemctl start weewx
 ```
 
@@ -173,7 +182,7 @@ source ~/weewx-venv/bin/activate
 source ~/weewx-venv/bin/activate
 
 # 1. Install the extension and answer the prompts
-weectl extension install weewx-EcowittGateway-0.0.1b4.zip
+weectl extension install weewx-EcowittGateway-0.0.1b5.zip
 
 # 2. Check it can talk to the gateway
 weectl device --live-data
@@ -195,7 +204,7 @@ source ~/weewx-venv/bin/activate
 sudo systemctl stop weewx                        # or stop weewxd
 weectl extension list
 weectl extension uninstall <old-name>            # or delete ~/weewx-data/bin/user/ecowitt_http.py
-weectl extension install weewx-EcowittGateway-0.0.1b4.zip
+weectl extension install weewx-EcowittGateway-0.0.1b5.zip
 sudo systemctl start weewx
 ```
 

@@ -8,6 +8,20 @@ follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 Nothing yet.
 
+## [0.0.1b5] – 24 September 2026 — fifth beta
+
+### Added
+
+- **Loop data file (`ecwLoop.json`).** A new `[[loop_json]]` option writes every loop packet to a
+  JSON file, for live web pages and scripts. It works in both driver and service mode.
+  - `path` sets where the file goes. A relative path means the WeeWX web pages folder (the default
+    is `ecwLoop.json` there); an absolute path, or a folder, can also be given.
+  - `units` sets the unit system: `native`, `us`, `metric` or `metricwx`.
+  - The file is replaced in one step, so readers never see a partial file. Write errors are logged
+    once rather than on every packet.
+- **Installer prompts for the loop data file:** whether to write it, where (web pages folder, WeeWX
+  data folder, `/tmp` or a custom path) and in which units.
+
 ## [0.0.1b4] – 24 September 2026 — fourth beta
 
 ### Added
@@ -189,6 +203,7 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
 [Unreleased]: #unreleased
+[0.0.1b5]: #001b5--24-september-2026--fifth-beta
 [0.0.1b4]: #001b4--24-september-2026--fourth-beta
 [0.0.1b3]: #001b3--24-september-2026--third-beta
 [0.0.1b2]: #001b2--24-september-2026--second-beta

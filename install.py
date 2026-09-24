@@ -28,6 +28,7 @@ it uses the defaults or the existing settings.
 
 import io
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -37,7 +38,7 @@ import weewx
 
 from weecfg.extension import ExtensionInstaller
 
-VERSION = '0.0.1b4'
+VERSION = '0.0.1b5'
 MODULE = 'weewx-EcowittGateway'
 SECTION = 'EcowittGateway'
 LEGACY_SECTION = 'EcowittHttp'
@@ -106,6 +107,14 @@ DRIVER_CONFIG = f"""
         source = either
         grace = 0
         retries = 3
+
+    # write each loop packet to a JSON file for web pages and scripts
+    [[loop_json]]
+        enable = False
+        # file or folder; a relative path is inside the WeeWX web pages folder (HTML_ROOT)
+        path = ecwLoop.json
+        # units in the file: native (as in the loop packet), us, metric or metricwx
+        units = native
 """
 
 TIPPING_MODELS = ('wh40', 'wh69', 'wn20')
@@ -285,6 +294,7 @@ class EcowittGatewayInstaller(ExtensionInstaller):
                                   str(existing.get('show_all_batt', 'False')).lower() == 'true')
         loop_on_init = mode != 'driver' or self._ask_yes(
             'Keep retrying at startup if the gateway cannot be reached (loop_on_init)?', True)
+        loop_json = self._ask_loop_json(config_dict, existing.get('loop_json', {}), out)
 
         if getattr(engine, 'dry_run', False):
             out('Dry run: weewx.conf not changed.')
@@ -312,6 +322,7 @@ class EcowittGatewayInstaller(ExtensionInstaller):
         section.update({'ip_address': ip, 'poll_interval': str(poll), 'rain_source': rain_source,
                         'show_all_batt': str(show_batt), 'api_key': api_key, 'app_key': app_key})
         section['catchup']['source'] = catchup
+        section['loop_json'].update(loop_json)
 
         if mode == 'driver':
             config_dict.setdefault('Station', {})['station_type'] = SECTION
@@ -337,6 +348,39 @@ class EcowittGatewayInstaller(ExtensionInstaller):
             out('Gateway settings saved; the station driver and services were not changed.')
         out('Restart WeeWX to start using the new settings.')
         return True
+
+    def _ask_loop_json(self, config_dict, current, out):
+        """Ask whether and where to write ecwLoop.json; returns the [[loop_json]] settings."""
+        name = 'ecwLoop.json'
+        weewx_root = config_dict.get('WEEWX_ROOT', '')
+        html_root = config_dict.get('StdReport', {}).get('HTML_ROOT', 'public_html')
+        web_dir = os.path.abspath(os.path.join(weewx_root, html_root))
+        locations = {'web': name, 'data': os.path.join(weewx_root, name), 'tmp': os.path.join('/tmp', name)}
+        path = str(current.get('path', name))
+        location = next((k for k, v in locations.items() if v == path), 'custom')
+        enable = self._ask_yes(f'Write each loop packet to {name} (for web pages and scripts)?',
+                               str(current.get('enable', 'False')).lower() == 'true')
+        if not enable:
+            return {'enable': 'False'}
+        out(f'    web    = WeeWX web pages folder: {os.path.join(web_dir, name)}')
+        out(f"    data   = WeeWX data folder: {locations['data']}")
+        out(f"    tmp    = {locations['tmp']} (often held in memory, which saves SD card writes)")
+        out('    custom = a folder or file path of your choice')
+        location = self._ask(f'Where should {name} be written', location, ['web', 'data', 'tmp', 'custom'])
+        if location == 'custom':
+            while True:
+                path = self._ask('    Folder or full file path', path if path not in locations.values() else '')
+                if path:
+                    break
+                out('    Please enter a path.')
+            folder = path if path.endswith(os.sep) or os.path.isdir(path) else os.path.dirname(path)
+            if folder and not os.path.isdir(os.path.expanduser(folder)):
+                out(f'    Note: {folder} does not exist yet; create it and make it writable by WeeWX.')
+        else:
+            path = locations[location]
+        units = self._ask(f'Units for {name}', str(current.get('units', 'native')).lower(),
+                          ['native', 'us', 'metric', 'metricwx'])
+        return {'enable': 'True', 'path': path, 'units': units}
 
     @staticmethod
     def _remove_service(config_dict):

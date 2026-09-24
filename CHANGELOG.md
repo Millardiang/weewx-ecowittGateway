@@ -8,6 +8,34 @@ follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 Nothing yet.
 
+## [0.0.1b7] – 24 September 2026 — seventh beta
+
+### Added
+
+- **Sensor mapping by hardware ID.** A new `[[sensor_map]]` section (`<sensor ID> = <channel>`)
+  reports a multi-channel sensor (WN31, WN34, WN35, WH41, WH51/WH52, WH54, WH55) on a fixed channel,
+  whichever gateway channel it is paired on. This keeps its data in the same WeeWX fields after a
+  battery change or re-pairing.
+  - All of the sensor's fields move with it: readings, battery, signal, RSSI and soil AD values.
+  - A sensor already on the chosen channel moves to the channel that was freed, so nothing is
+    merged or lost.
+  - Applies to loop packets (driver and service), `ecwLoop.json`, MQTT and catchup records.
+  - Unpaired IDs, out-of-range channels and duplicate channels are logged and ignored. Channel
+    moves are logged when they start or change.
+- **`--list-sensors`** (`weectl device` and the module): lists each paired sensor by hardware ID with
+  its gateway channel, reported channel, signal, battery, a live reading and the WeeWX fields it
+  feeds, then prints a ready-made `[[sensor_map]]`.
+- **`--dump-api`**: saves every raw API response, including all sensor pages, as one JSON document
+  (`--output=FILE`). Passwords, keys and station IDs are masked unless `--unmask` is given.
+- **`--no-sensor-map`**: shows the gateway's own channels in `--list-sensors`, `--live-data` and
+  `--test-driver`.
+- **Installer prompt** listing the paired multi-channel sensors and offering to lock them to their
+  current channels. On an upgrade, only new sensors are offered.
+
+### Changed
+
+- `--live-data` and `--test-driver` apply the sensor map and show the channel moves first.
+
 ## [0.0.1b6] – 24 September 2026 — sixth beta
 
 ### Added
@@ -226,6 +254,7 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
 [Unreleased]: #unreleased
+[0.0.1b7]: #001b7--24-september-2026--seventh-beta
 [0.0.1b6]: #001b6--24-september-2026--sixth-beta
 [0.0.1b5]: #001b5--24-september-2026--fifth-beta
 [0.0.1b4]: #001b4--24-september-2026--fourth-beta

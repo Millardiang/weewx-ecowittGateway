@@ -4,7 +4,7 @@ A [WeeWX](https://weewx.com) driver and service for Ecowitt gateways and console
 **local HTTP API**. There's no cloud dependency for live data, and the gateway doesn't need any
 custom-server or upload configuration.
 
-**Version:** 0.0.1 beta 6 (`0.0.1b6`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
+**Version:** 0.0.1 beta 7 (`0.0.1b7`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
 
 This is a compact rewrite of `ecowitt_http.py`. It keeps the same
 configuration, field names and command-line tools, fixes a number of bugs and is about 80% smaller.
@@ -23,6 +23,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 - [Loop data file (ecwLoop.json)](#loop-data-file-ecwloopjson)
 - [MQTT](#mqtt)
 - [Catchup (missed data)](#catchup-missed-data)
+- [Sensor mapping (hardware IDs)](#sensor-mapping-hardware-ids)
 - [Field mapping](#field-mapping)
 - [Command-line tools](#command-line-tools)
 - [Troubleshooting](#troubleshooting)
@@ -92,7 +93,7 @@ WeeWX 5.4.0 or later.
 In short:
 
 ```bash
-weectl extension install weewx-EcowittGateway-0.0.1b6.zip
+weectl extension install weewx-EcowittGateway-0.0.1b7.zip
 sudo systemctl restart weewx
 ```
 
@@ -107,6 +108,7 @@ The installer asks for your settings, so there's nothing to edit in `weewx.conf`
 | Use as the station driver, as a service alongside another driver, or skip | driver |
 | Rain gauges to use: `both`, `tipping` or `piezo` (asked only if both gauge types are paired, or none were found) | both |
 | Where to fetch missed data from at start-up, and Ecowitt.net keys if needed | either |
+| Lock multi-channel sensors to their current channels by hardware ID (`sensor_map`) | yes |
 | Show battery state for sensors with no signal | no |
 | Keep retrying at start-up if the gateway can't be reached (`loop_on_init`) | yes |
 | Write each loop packet to `ecwLoop.json`, where (web / data / tmp / custom) and in which units | no |
@@ -151,6 +153,7 @@ earlier betas) if there is no `[EcowittGateway]` section; the installer moves it
 | `wn32_outdoor` | `False` | Report WH26 battery/signal as an outdoor WN32P instead. |
 | `debug` | *(none)* | Comma-separated list of extra logging: `rain`, `raindelta`, `wind`, `lightning`, `loop`, `sensors`, `parser`, `catchup`, `collector`, `archive`. |
 | `api_key`, `app_key` | *(none)* | Ecowitt.net keys; only needed for Ecowitt.net catchup. |
+| `[[sensor_map]]` | | Report multi-channel sensors on fixed channels by hardware ID. See [Sensor mapping](#sensor-mapping-hardware-ids). |
 | `[[loop_json]]` | | Write each loop packet to `ecwLoop.json`. See [Loop data file](#loop-data-file-ecwloopjson). |
 | `[[mqtt]]` | | Publish each loop packet to an MQTT broker. See [MQTT](#mqtt). |
 | `[[catchup]]` | | See [Catchup](#catchup-missed-data). |
@@ -366,6 +369,90 @@ At start-up WeeWX asks the driver for any records it missed:
 
 ---
 
+## Sensor mapping (hardware IDs)
+
+Multi-channel sensors report their data by **gateway channel**, and WeeWX fields follow the channel:
+the WN31 on channel 3 feeds `extraTemp3`, the WH51 on channel 2 feeds `soilMoist2`, and so on. For
+some sensors the gateway chooses the channel in the order it pairs them, so a battery change or
+re-pairing can move a sensor to another channel, and its readings then end up in another sensor's
+WeeWX fields.
+
+`[[sensor_map]]` fixes that by locking each sensor to a channel by its **hardware ID** (the ID
+printed on the sensor and shown in the WS View Plus app). Whichever gateway channel the sensor is
+paired on, its data is reported on the channel you choose.
+
+```ini
+[EcowittGateway]
+    [[sensor_map]]
+        # <sensor ID> = <channel to report it as>
+        5A = 3        # WN31 in the greenhouse -> extraTemp3 / extraHumid3
+        B9 = 2        # WH51 in the veg bed    -> soilMoist2
+```
+
+- Mapping works for WN31, WN34, WN35, WH41, WH51 (and WH52), WH54 and WH55. Single sensors such as
+  the WS90 or WH40 have fixed fields and don't need it.
+- Every field belonging to the sensor moves with it: readings, battery, signal and RSSI, and the
+  soil AD values.
+- If another sensor is already on the channel you chose, it moves to the channel that was freed,
+  so data is never merged or lost. Sensors that aren't listed keep their channels where possible.
+- IDs are not case-sensitive and may have a `0x` prefix. A channel can also be written `ch3`.
+- Entries for a sensor that isn't paired, a channel out of range or a channel used twice are logged
+  as warnings and ignored. Each change of channel is logged once at start-up, and again if the
+  pairing changes.
+- Mapping applies to live data in driver and service mode, to `ecwLoop.json` and MQTT, and to
+  catchup records. Catchup uses the current pairing, so records from before a re-pairing are mapped
+  as if the sensor were paired as it is now.
+
+The installer finds your sensors and offers to lock each one to its current channel. To see the IDs
+and set the map up by hand, use `--list-sensors` (see below).
+
+### Finding sensor IDs: --list-sensors
+
+```bash
+weectl device --list-sensors
+```
+
+```
+Sensor map: 2 sensor(s) locked to channels by hardware ID
+    WN31 sensor 5A on gateway channel 1 is reported as channel 3 (mapped)
+    WH51 sensor B9 on gateway channel 9 is reported as channel 2 (mapped)
+
+Sensor    ID    Signal      Battery  Reading                  Reported as   WeeWX fields
+------------------------------------------------------------------------------------------------
+WN31 CH1  5A    4/4 -80dBm  0        24.3° / 50%              CH3 (mapped)  batteryStatus3, extraHumid3,
+                                                                            extraTemp3, wh31_ch3_rssi, ...
+WH51 CH1  B1    4/4 -60dBm  5        33% / 18.2° / 123 µS/cm  CH1           soilMoist1, soilMoistBatt1, ...
+WH51 CH9  B9    3/4 -61dBm  4        41%                      CH2 (mapped)  soilMoist2, soilMoistBatt2, ...
+WS90      C7F2  4/4 -70dBm  5                                 fixed         ws90_batt, ws90_rssi, ws90_sig
+
+To keep each sensor on the channel it is reported on now, even if it is re-paired
+onto a different gateway channel, add this to [EcowittGateway] in weewx.conf:
+
+    [[sensor_map]]
+        5A = 3       # WN31
+        B1 = 1       # WH51
+        B9 = 2       # WH51
+```
+
+The **Reading** column helps tell sensors apart: warm a WN31 in your hand, or put a soil probe in
+water, and watch which row changes. Add `--no-sensor-map` to see the gateway's own channels.
+
+`--live-data` and `--test-driver` apply the sensor map too (`--no-sensor-map` turns it off), and
+print the channel moves before the data.
+
+### Saving the raw API responses: --dump-api
+
+```bash
+weectl device --dump-api --output=ecowitt-dump.json
+```
+
+This saves the gateway's raw response to every API call (all five pages of sensor information
+included) as one JSON file, exactly as the gateway sent it. It's useful when reporting a problem or
+a sensor the driver doesn't know yet. Passwords, keys and weather-service station IDs are masked;
+add `--unmask` only if you need them. Without `--output` the JSON is printed.
+
+---
+
 ## Field mapping
 
 To list every WeeWX field and the gateway field it comes from:
@@ -402,6 +489,8 @@ With WeeWX 5, use `weectl device` (it reads your `weewx.conf`):
 |---|---|
 | `weectl device --live-data [--units=us\|metric\|metricwx]` | Current values, mapped to WeeWX fields |
 | `weectl device --sensors [--show-all-batt]` | Sensor IDs, signal, RSSI and battery state |
+| `weectl device --list-sensors [--no-sensor-map]` | Multi-channel sensors by hardware ID: gateway channel, reported channel, a live reading and the WeeWX fields fed, plus a ready-made `[[sensor_map]]` |
+| `weectl device --dump-api [--output=FILE] [--unmask]` | Every raw API response as one JSON document, secrets masked |
 | `weectl device --firmware` | Gateway and sensor firmware, and whether an update is available |
 | `weectl device --mac-address` | Gateway MAC address |
 | `weectl device --system-params` | Radio frequency, time zone, DST and so on |
@@ -420,7 +509,7 @@ Running the module directly also gives you:
 | Command | Does |
 |---|---|
 | `--discover` | Find gateways on the local network |
-| `--test-driver` | Print live loop packets |
+| `--test-driver [--no-sensor-map]` | Print live loop packets (with the sensor map applied) |
 | `--test-service` | Run the service against a simulated station |
 | `--weewx-fields` | Print one packet of WeeWX fields |
 | `--default-map`, `--driver-map`, `--service-map` | Print the field maps |
@@ -439,6 +528,7 @@ each install type.
 | WeeWX exits at start-up when the gateway is offline | Set `loop_on_init = 1`. |
 | Rain is double-counted | Remove the `[StdWXCalculate] [[Delta]] [[[rain]]]` entry, and don't run the driver and the service at the same time. |
 | A sensor is missing from packets | Run `weectl device --sensors`. `sensor is registering...` means the gateway hasn't paired with it yet. |
+| A sensor's readings moved to other WeeWX fields after a battery change or re-pairing | Run `weectl device --list-sensors` and add the `[[sensor_map]]` it suggests, with each ID set to the channel you want. |
 | Need more detail in the log | Add `debug = loop` (or another debug option) to `[EcowittGateway]`, or set `debug = 1` at the top of `weewx.conf`. |
 
 Logs:
@@ -452,8 +542,8 @@ Logs:
 
 See **[VERSIONING.md](VERSIONING.md)**. In brief:
 
-- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b6`);
-- the current release is the sixth beta;
+- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b7`);
+- the current release is the seventh beta;
 - configuration compatibility with `ecowitt_http.py` is kept throughout 0.x.
 
 ---

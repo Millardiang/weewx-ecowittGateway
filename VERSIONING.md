@@ -40,7 +40,7 @@ weectl extension list
 python3 weewx-EcowittGateway.py --version
 ```
 
-It also appears in the WeeWX log at start-up (`EcowittHttpDriver: version is 0.0.1b6`).
+It also appears in the WeeWX log at start-up (`EcowittHttpDriver: version is 0.0.1b7`).
 
 ## Roadmap to 1.0.0
 

@@ -48,6 +48,13 @@ Fetch missed data at startup from (either/device/net/none) [either]:
     (press Enter to leave them blank).
     Ecowitt.net API key []:
     Ecowitt.net application key []:
+    Multi-channel sensors found:
+        WN31  CH1   ID 5A
+        WH51  CH1   ID B1
+        WH51  CH2   ID B9
+    Locking a sensor to its channel keeps its data in the same WeeWX fields
+    if it is re-paired onto a different gateway channel later.
+Lock these sensors to their current channels (sensor_map)? (y/n) [y]:
 Show battery state for sensors with no signal? (y/n) [n]:
 Keep retrying at startup if the gateway cannot be reached (loop_on_init)? (y/n) [y]:
 Write each loop packet to ecwLoop.json (for web pages and scripts)? (y/n) [n]: y
@@ -84,6 +91,10 @@ Publish each loop packet to an MQTT broker? (y/n) [n]: y
   records, `loop_on_init` and the rain calculation settings.
 - **service:** adds gateway data to another driver's loop packets. Your `station_type` is left alone.
 - **skip:** only saves the gateway settings.
+- **Sensor map:** if multi-channel sensors (WN31, WN34, WN35, WH41, WH51, WH54, WH55) are paired,
+  the installer lists them by hardware ID and offers to lock each to its current channel, so its
+  data stays in the same WeeWX fields if it's re-paired later. On an upgrade, only sensors not
+  already in the map are offered. See the README's *Sensor mapping* section.
 - **ecwLoop.json:** optional. Writes every loop packet to a JSON file for live web pages or
   scripts, in the location and units you choose. See the README for details.
 - **MQTT:** optional. Publishes every loop packet to an MQTT broker. The installer checks the
@@ -115,7 +126,7 @@ It saves the default settings with `ip_address = replace_me` and doesn't change 
 
 ```bash
 # 1. Install the extension and answer the prompts
-sudo weectl extension install weewx-EcowittGateway-0.0.1b6.zip
+sudo weectl extension install weewx-EcowittGateway-0.0.1b7.zip
 
 # 2. Check it can talk to the gateway
 sudo weectl device --live-data
@@ -128,7 +139,7 @@ sudo journalctl -u weewx -f
 When it's working, the log shows lines like:
 
 ```
-EcowittHttpDriver: version is 0.0.1b6
+EcowittHttpDriver: version is 0.0.1b7
      device IP address is 192.168.1.100
 EcowittHttpCollector startup
 Using 'rain.0x13.val' for rain total
@@ -140,7 +151,7 @@ Using 'rain.0x13.val' for rain total
 sudo systemctl stop weewx
 sudo weectl extension list                       # note the old extension's name
 sudo weectl extension uninstall <old-name>       # or delete /etc/weewx/bin/user/ecowitt_http.py
-sudo weectl extension install weewx-EcowittGateway-0.0.1b6.zip
+sudo weectl extension install weewx-EcowittGateway-0.0.1b7.zip
 sudo systemctl start weewx
 ```
 
@@ -172,7 +183,8 @@ The uninstall removes:
 - the accumulator entries;
 - the service entry, if you used service mode.
 
-Any settings you added yourself, such as `[[field_map_extensions]]`, are left in place.
+Any settings you added yourself, such as `[[field_map_extensions]]` and the entries in
+`[[sensor_map]]`, are left in place.
 
 WeeWX's uninstaller can't change `station_type`. If you used driver mode, run
 `weectl station reconfigure` as shown to choose another driver before restarting.
@@ -200,7 +212,7 @@ source ~/weewx-venv/bin/activate
 source ~/weewx-venv/bin/activate
 
 # 1. Install the extension and answer the prompts
-weectl extension install weewx-EcowittGateway-0.0.1b6.zip
+weectl extension install weewx-EcowittGateway-0.0.1b7.zip
 
 # 2. Check it can talk to the gateway
 weectl device --live-data
@@ -222,7 +234,7 @@ source ~/weewx-venv/bin/activate
 sudo systemctl stop weewx                        # or stop weewxd
 weectl extension list
 weectl extension uninstall <old-name>            # or delete ~/weewx-data/bin/user/ecowitt_http.py
-weectl extension install weewx-EcowittGateway-0.0.1b6.zip
+weectl extension install weewx-EcowittGateway-0.0.1b7.zip
 sudo systemctl start weewx
 ```
 
@@ -274,6 +286,8 @@ For service mode, leave `station_type` alone and add
 ## Running the command-line tools
 
 `weectl device …` covers most needs.
+
+`weectl device --list-sensors` and `weectl device --dump-api` also work there.
 
 The extra tools (`--discover`, `--test-driver`, `--test-service`, `--weewx-fields`, `--default-map`,
 `--driver-map`, `--service-map`) need the module to be run directly:

@@ -41,7 +41,7 @@ import weewx
 
 from weecfg.extension import ExtensionInstaller
 
-VERSION = '0.0.1b6'
+VERSION = '0.0.1b7'
 MODULE = 'weewx-EcowittGateway'
 SECTION = 'EcowittGateway'
 LEGACY_SECTION = 'EcowittHttp'
@@ -105,6 +105,12 @@ DRIVER_CONFIG = f"""
     api_key = ""
     app_key = ""
 
+    # report multi-channel sensors (WN31, WN34, WN35, WH41, WH51, WH54, WH55) on fixed
+    # channels by hardware ID, whichever gateway channel they are paired on:
+    #     <sensor ID> = <channel>
+    # 'weectl device --list-sensors' shows the IDs and a ready-made list
+    [[sensor_map]]
+
     # where to fetch missed data from at startup: either, device, net or none
     [[catchup]]
         source = either
@@ -141,6 +147,9 @@ DRIVER_CONFIG = f"""
 """
 
 TIPPING_MODELS = ('wh40', 'wh69', 'wn20')
+# multi-channel sensor models (the API still reports some by their older WHnn names)
+CHANNEL_MODELS = {'wn31': 'wn31', 'wh31': 'wn31', 'wn34': 'wn34', 'wh34': 'wn34', 'wn35': 'wn35', 'wh35': 'wn35',
+                  'wh41': 'wh41', 'wh51': 'wh51', 'wh54': 'wh54', 'wh55': 'wh55'}
 PIEZO_MODELS = ('ws85', 'ws90', 'wh85', 'wh90')
 
 
@@ -211,12 +220,12 @@ class EcowittGatewayInstaller(ExtensionInstaller):
             return json.loads(resp.read().decode('utf-8'))
 
     def _probe(self, ip):
-        """Return (model, set of paired gauge types) or (None, None) if unreachable."""
+        """Return (model, set of paired gauge types, [(sensor model, channel, ID)]) or Nones if unreachable."""
         try:
             version = self._get_json(ip, 'get_version').get('version', '')
         except Exception:
-            return None, None
-        gauges = set()
+            return None, None, None
+        gauges, channels = set(), []
         try:
             for page in range(1, 6):
                 sensors = self._get_json(ip, 'get_sensors_info', page=page)
@@ -230,9 +239,14 @@ class EcowittGatewayInstaller(ExtensionInstaller):
                         gauges.add('tipping')
                     elif img in PIEZO_MODELS:
                         gauges.add('piezo')
+                    match = re.search(r'CH(\d+)', str(sensor.get('name', '')))
+                    if img in CHANNEL_MODELS and match:
+                        channels.append((CHANNEL_MODELS[img], int(match.group(1)), str(sensor['id'])))
         except Exception:
             pass
-        return version[8:].strip() or 'unknown model', gauges
+        order = list(dict.fromkeys(CHANNEL_MODELS.values()))
+        channels.sort(key=lambda c: (order.index(c[0]), c[1]))
+        return version[8:].strip() or 'unknown model', gauges, channels
 
     @staticmethod
     def _place_after_station(config_dict):
@@ -262,12 +276,12 @@ class EcowittGatewayInstaller(ExtensionInstaller):
 
         # gateway address, checked by contacting the device
         ip = existing.get('ip_address', 'replace_me')
-        model = gauges = None
+        model = gauges = channels = None
         while True:
             ip = self._ask('Gateway IP address, eg 192.168.1.100', ip)
             if ip == 'replace_me' or not self._interactive():
                 break
-            model, gauges = self._probe(ip)
+            model, gauges, channels = self._probe(ip)
             if model:
                 out(f'    Found {model} at {ip}')
                 break
@@ -313,6 +327,7 @@ class EcowittGatewayInstaller(ExtensionInstaller):
             out('    (press Enter to leave them blank).')
             api_key = self._ask('    Ecowitt.net API key', api_key or '')
             app_key = self._ask('    Ecowitt.net application key', app_key or '')
+        sensor_map = self._ask_sensor_map(existing.get('sensor_map', {}), channels, out)
         show_batt = self._ask_yes('Show battery state for sensors with no signal?',
                                   str(existing.get('show_all_batt', 'False')).lower() == 'true')
         loop_on_init = mode != 'driver' or self._ask_yes(
@@ -346,6 +361,10 @@ class EcowittGatewayInstaller(ExtensionInstaller):
         section.update({'ip_address': ip, 'poll_interval': str(poll), 'rain_source': rain_source,
                         'show_all_batt': str(show_batt), 'api_key': api_key, 'app_key': app_key})
         section['catchup']['source'] = catchup
+        for sid, (channel, note) in sensor_map.items():
+            if sid not in section['sensor_map']:
+                section['sensor_map'][sid] = channel
+                section['sensor_map'].inline_comments[sid] = f'# {note}'
         section['loop_json'].update(loop_json)
         section['mqtt'].update(mqtt)
 
@@ -373,6 +392,27 @@ class EcowittGatewayInstaller(ExtensionInstaller):
             out('Gateway settings saved; the station driver and services were not changed.')
         out('Restart WeeWX to start using the new settings.')
         return True
+
+    def _ask_sensor_map(self, current, channels, out):
+        """Offer to lock multi-channel sensors to their channels; returns {ID: (channel, comment)}."""
+        result = {sid: (str(ch), '') for sid, ch in current.items()}
+        if not channels:
+            return result
+        known = {_sensor_id(sid) for sid in current}
+        new = [c for c in channels if _sensor_id(c[2]) not in known]
+        out('    Multi-channel sensors found:')
+        for model, channel, sid in channels:
+            state = '' if _sensor_id(sid) not in known else '  (already in the sensor map)'
+            out(f'        {model.upper():<5} CH{channel:<3} ID {sid}{state}')
+        if not new:
+            return result
+        out('    Locking a sensor to its channel keeps its data in the same WeeWX fields')
+        out('    if it is re-paired onto a different gateway channel later.')
+        what = 'these sensors' if not current else f'the {len(new)} new sensor(s)'
+        if self._ask_yes(f'Lock {what} to their current channels (sensor_map)?', True):
+            for model, channel, sid in new:
+                result[sid] = (str(channel), model.upper())
+        return result
 
     def _ask_secret(self, prompt, current):
         """Ask for a password without echoing it; Enter keeps the current value."""
@@ -462,6 +502,13 @@ class EcowittGatewayInstaller(ExtensionInstaller):
             data_services = _as_list(services['data_services'])
             if SERVICE in data_services:
                 services['data_services'] = [s for s in data_services if s != SERVICE]
+
+
+def _sensor_id(value):
+    """A hardware sensor ID in a comparable form: upper case hex, no 0x prefix or leading zeros."""
+    text = str(value).strip().upper()
+    text = text[2:] if text.startswith('0X') else text
+    return text.lstrip('0') or '0'
 
 
 def _as_list(value):

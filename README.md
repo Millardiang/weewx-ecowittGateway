@@ -7,7 +7,7 @@ custom-server or upload configuration.
 **Version:** 0.0.1 beta 8 (`0.0.1b8`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
 
 This is a compact rewrite of `ecowitt_http.py`. It keeps the same
-configuration, field names and command-line tools, fixes a number of bugs and is about 80% smaller.
+configuration, field names and command-line tools, fixes a number of bugs and is about 75% smaller.
 See [CHANGELOG.md](CHANGELOG.md).
 
 ---

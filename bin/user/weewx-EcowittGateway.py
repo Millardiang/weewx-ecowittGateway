@@ -9,7 +9,6 @@ Copyright (C) 2026 Ian Millard
 
 Derived from ecowitt_http.py, which carries the following notices:
     Copyright (C) 2024-25 Gary Roderick                 gjroderick<at>gmail.com
-    Copyright (C) 2025-26 Werner Krenn
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -23,7 +22,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 0.0.1 beta 6
+Version: 0.0.1 beta 7
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -83,7 +82,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '0.0.1b6'
+DRIVER_VERSION = '0.0.1b7'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -284,6 +283,19 @@ def define_units():
 SENSOR_CHANNELS = {'wn20': 0, 'wh24': 0, 'wh25': 0, 'wh26': 0, 'wh65': 0, 'wn32': 0, 'wn32p': 0, 'wn31': 8,
                    'wn34': 8, 'wn35': 8, 'wn38': 0, 'wh40': 0, 'wh41': 4, 'wh45': 0, 'wh51': 16, 'wh54': 4,
                    'wh55': 4, 'wh57': 0, 'wh68': 0, 'wh69': 0, 'ws80': 0, 'ws85': 0, 'ws90': 0}
+
+
+# multi-channel sensor model: (number of channels, live data groups it feeds)
+SENSOR_GROUPS = {'wn31': (8, ('ch_aisle',)), 'wn34': (8, ('ch_temp',)), 'wn35': (8, ('ch_leaf',)),
+                 'wh41': (4, ('ch_pm25',)), 'wh51': (16, ('ch_soil', 'ch_ec')), 'wh54': (4, ('ch_lds',)),
+                 'wh55': (4, ('ch_leak',))}
+_GROUP_MODEL = {group: model for model, (_, groups) in SENSOR_GROUPS.items() for group in groups}
+# a live data field that helps identify each multi-channel sensor
+_SENSOR_READING = {'ch_aisle': ('temp', 'humidity'), 'ch_temp': ('temp',), 'ch_leaf': ('humidity',),
+                   'ch_pm25': ('PM25',), 'ch_soil': ('humidity',), 'ch_ec': ('temp', 'ec'),
+                   'ch_lds': ('depth',), 'ch_leak': ('status',)}
+_READING_UNIT = {'temp': '\u00b0', 'humidity': '%', 'PM25': ' \u00b5g/m\u00b3', 'ec': ' \u00b5S/cm', 'depth': ' mm'}
+_UNREGISTERED_IDS = ('FFFFFFFE', 'FFFFFFFF')
 
 
 def _sensor_names(model, channels):
@@ -743,6 +755,148 @@ class OnceLogger:
             self.last = None
 
 
+def sensor_id(value):
+    """A hardware sensor ID in a comparable form: upper case hex, no 0x prefix or leading zeros."""
+    text = str(value).strip().upper()
+    text = text[2:] if text.startswith('0X') else text
+    return text.lstrip('0') or '0'
+
+
+def channel_keys(model, channel):
+    """Prefixes (or whole names) of the fields that belong to channel of a multi-channel model."""
+    keys = [f'{model}.ch{channel}.'] + [f'{group}.{channel}.' for group in SENSOR_GROUPS[model][1]]
+    if model == 'wh51':
+        keys += [f'ch_soil{channel}nowAd', f'ch_ec{channel}nowAd']
+    return keys
+
+
+_CHANNEL_KEY = re.compile(r'(?:(\w+?)\.ch(\d+)\.|(ch_[a-z0-9]+)\.(\d+)\.|(ch_soil|ch_ec)(\d+)nowAd$)')
+_SENSOR_ID_KEY = re.compile(r'(\w+?)\.ch(\d+)\.id')
+
+
+class SensorMapper:
+    """Reports multi-channel sensors on fixed channels chosen by hardware ID ([[sensor_map]]).
+
+    Each entry is '<sensor ID> = <channel>'. The sensor's data is reported on that channel whichever
+    gateway channel it is paired on. A sensor pushed off that channel takes the channel that was
+    freed, so data is never merged or lost.
+    """
+
+    def __init__(self, config=None):
+        self.targets = {}
+        for key, value in (config or {}).items():
+            match = re.fullmatch(r'(?:ch)?\s*(\d+)', str(value).strip().lower())
+            if match and re.fullmatch(r'(0x)?[0-9a-f]+', str(key).strip().lower()):
+                self.targets[sensor_id(key)] = int(match.group(1))
+            else:
+                log.error("sensor_map: ignoring '%s = %s', expected '<sensor ID> = <channel number>'", key, value)
+        self.plan_key = None
+        self.perms, self.lines, self.problems = {}, [], []
+
+    def __bool__(self):
+        return bool(self.targets)
+
+    @staticmethod
+    def paired(data):
+        """{model: {gateway channel: sensor ID}} for the registered multi-channel sensors in data."""
+        found = {}
+        for key, value in data.items():
+            match = _SENSOR_ID_KEY.fullmatch(key)
+            if match and match.group(1) in SENSOR_GROUPS and value is not None \
+                    and str(value).upper() not in _UNREGISTERED_IDS:
+                found.setdefault(match.group(1), {})[int(match.group(2))] = str(value)
+        return found
+
+    def plan(self, sensors):
+        """Work out, and log when it changes, the channel moves {model: {from: to}} for sensors."""
+        if not self.targets:
+            return {}
+        paired = self.paired(sensors)
+        key = tuple(sorted((m, c, i) for m, chans in paired.items() for c, i in chans.items()))
+        if key == self.plan_key:
+            return self.perms
+        self.plan_key = key
+        where = {sensor_id(i): (m, c) for m, chans in paired.items() for c, i in chans.items()}
+        wanted, problems = {}, []
+        for sid, target in self.targets.items():
+            if sid not in where:
+                problems.append(f'sensor {sid} is not paired with the gateway, so it is not mapped')
+                continue
+            model, channel = where[sid]
+            count = SENSOR_GROUPS[model][0]
+            if not 1 <= target <= count:
+                problems.append(f'{model.upper()} sensor {sid}: channel {target} is outside 1-{count}, not mapped')
+            elif target in wanted.get(model, {}).values():
+                problems.append(f'{model.upper()} sensor {sid}: channel {target} is already mapped to another '
+                                'sensor, not mapped')
+            else:
+                wanted.setdefault(model, {})[channel] = target
+        self.perms, self.lines = {}, []
+        for model, moves in wanted.items():
+            perm = self._permutation(moves, paired[model], SENSOR_GROUPS[model][0])
+            for src, dst in sorted(perm.items()):
+                if src != dst and src in paired[model]:
+                    why = 'mapped' if src in moves else 'moved to make room'
+                    self.lines.append(f'{model.upper()} sensor {paired[model][src]} on gateway channel {src} '
+                                      f'is reported as channel {dst} ({why})')
+            if any(src != dst for src, dst in perm.items()):
+                self.perms[model] = perm
+        self.problems = problems
+        for problem in problems:
+            log.warning('sensor_map: %s', problem)
+        for line in self.lines:
+            log.info('sensor_map: %s', line)
+        if not self.lines and not problems:
+            log.info('sensor_map: every mapped sensor is already on its channel')
+        return self.perms
+
+    @staticmethod
+    def _permutation(moves, occupied, count):
+        """Extend moves {from: to} to a one-to-one mapping of every channel 1..count."""
+        perm = dict(moves)
+        taken = set(moves.values())
+        for channel in sorted(occupied):
+            if channel not in perm and channel not in taken:
+                perm[channel] = channel
+                taken.add(channel)
+        channels = range(1, count + 1)
+        # sensors pushed off their channel go first, preferably to the channels mapped sensors left
+        sources = sorted(c for c in occupied if c not in perm) + [c for c in channels
+                                                                  if c not in perm and c not in occupied]
+        free = [c for c in moves if c not in taken] + [c for c in channels if c not in taken and c not in moves]
+        perm.update(zip(sources, free))
+        return perm
+
+    def reported_channel(self, model, channel):
+        return self.perms.get(model, {}).get(channel, channel)
+
+    def apply(self, data, sensors=None):
+        """Return data with multi-channel sensor fields moved to their reported channels.
+
+        sensors is the sensor data holding the IDs, if data itself does not (catchup records).
+        """
+        if not self.targets:
+            return data
+        perms = self.plan(data if sensors is None else sensors)
+        if not perms:
+            return data
+        result = {}
+        for key, value in data.items():
+            match = _CHANNEL_KEY.match(key)
+            if match:
+                model, mch, group, gch, ad, adch = match.groups()
+                owner, channel, fmt = ((model, mch, f'{model}.ch{{}}.') if model else
+                                       (_GROUP_MODEL.get(group), gch, f'{group}.{{}}.') if group else
+                                       ('wh51', adch, f'{ad}{{}}nowAd'))
+                new = perms.get(owner, {}).get(int(channel))
+                if new is not None:
+                    key = fmt.format(new) + key[match.end():]
+                    if group and key.endswith('.channel'):
+                        value = new
+            result[key] = value
+        return result
+
+
 class LoopJsonWriter:
     """Writes each loop packet to a JSON file (ecwLoop.json by default) for web pages and scripts."""
 
@@ -914,7 +1068,7 @@ class EcowittCommon:
             get_soilad=to_bool(ec_config.get('get_soilad', DEFAULT_GET_SOILAD)),
             log_unknown_fields=to_bool(ec_config.get('log_unknown_fields', False)),
             fw_update_check_interval=int(ec_config.get('firmware_update_check_interval', DEFAULT_FW_CHECK_INTERVAL)),
-            debug=dbg)
+            sensor_map=ec_config.get('sensor_map'), debug=dbg)
         self.rain, self.piezo, self.lightning = self._trackers()
         self.loop_json = LoopJsonWriter(ec_config.get('loop_json', {}), html_dir)
         self.mqtt = MqttPublisher(ec_config.get('mqtt', {}))
@@ -1166,7 +1320,15 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
             catchup_obj = self.catchup_factory()
         except CatchupObjectError:
             return
+        mapper, sensors = self.collector.sensor_mapper, None
+        if mapper:
+            try:
+                sensors = self.collector.device.get_sensors_data()
+            except (DeviceIOError, InvalidApiResponseError) as e:
+                log.error('sensor_map: cannot read sensor IDs, catchup records are not remapped: %s', e)
         for rec in catchup_obj.gen_history_records(start_ts=since_ts):
+            if sensors is not None:
+                rec = mapper.apply(rec, sensors)
             record = {'dateTime': rec['datetime'], 'usUnits': self.unit_system, 'interval': rec['interval']}
             rain, piezo = self.rain_a.update(rec), self.piezo_a.update(rec)
             if 'lightning.count' in rec:
@@ -1438,6 +1600,8 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
                 f'       %prog --live-data\n            {common}[--units=us|metric|metricwx]\n'
                 f'            [--show-all-batt]\n            [--debug=0|1|2|3]\n'
                 f'       %prog --sensors\n            {common}[--show-all-batt]\n            [--debug=0|1|2|3]\n'
+                f'       %prog --list-sensors\n            {common}[--no-sensor-map]\n            [--debug=0|1|2|3]\n'
+                f'       %prog --dump-api\n            {common}[--output=FILE] [--unmask]\n'
                 f'       %prog --firmware|--mac-address|--system-params|\n'
                 f'            --get-rain-data|--get-all-rain_data\n            {common}[--debug=0|1|2|3]\n'
                 f'       %prog --get-calibration|--get-mulch-th-cal|\n'
@@ -1453,6 +1617,10 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
         for opt, dest, text in (
                 ('--live-data', 'live', 'display device live sensor data'),
                 ('--sensors', 'sensors', 'display device sensor information'),
+                ('--list-sensors', 'list_sensors',
+                 'list multi-channel sensors by hardware ID with their channels and WeeWX fields'),
+                ('--dump-api', 'dump_api', 'save every raw API response as JSON (passwords masked)'),
+                ('--no-sensor-map', 'no_sensor_map', 'ignore [[sensor_map]] and show gateway channels'),
                 ('--firmware', 'firmware', 'display device firmware information'),
                 ('--mac-address', 'mac', 'display device station MAC address'),
                 ('--system-params', 'sys_params', 'display device system parameters'),
@@ -1472,6 +1640,7 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
                 ('--unmask', 'unmask', 'unmask sensitive settings')):
             parser.add_option(opt, dest=dest, action='store_true', help=text)
         parser.add_option('--ip-address', dest='ip_address', help='device IP address to use')
+        parser.add_option('--output', dest='output', metavar='FILE', help='file for --dump-api output')
         for opt, dest, text in (('--max-tries', 'max_tries', 'max number of attempts to contact the device'),
                                 ('--retry-wait', 'retry_wait',
                                  'how long to wait between attempts to contact the device'),
@@ -1855,7 +2024,7 @@ class EcowittHttpCollector:
     def __init__(self, ip_address, poll_interval=DEFAULT_POLL_INTERVAL, max_tries=DEFAULT_MAX_TRIES,
                  retry_wait=DEFAULT_RETRY_WAIT, url_timeout=DEFAULT_URL_TIMEOUT, unit_system=DEFAULT_UNIT_SYSTEM,
                  show_battery=DEFAULT_FILTER_BATTERY, log_unknown_fields=False, get_soilad=DEFAULT_GET_SOILAD,
-                 fw_update_check_interval=DEFAULT_FW_CHECK_INTERVAL, debug=None):
+                 fw_update_check_interval=DEFAULT_FW_CHECK_INTERVAL, sensor_map=None, debug=None):
         self.queue = queue.Queue()
         self.poll_interval = poll_interval
         self.debug = debug or DebugOptions()
@@ -1870,6 +2039,10 @@ class EcowittHttpCollector:
                  else 'not be reported for sensors with no signal data')
         log.info('     unknown fields will be %s', 'reported' if log_unknown_fields else 'ignored')
         log.info('     Soil Ad values are %sfetched', '' if get_soilad else 'not ')
+        self.sensor_mapper = SensorMapper(sensor_map)
+        if self.sensor_mapper:
+            log.info('     %d sensor(s) reported on fixed channels by hardware ID (sensor_map)',
+                     len(self.sensor_mapper.targets))
         self.device = EcowittDevice(ip_address=ip_address, unit_system=unit_system, max_tries=max_tries,
                                     retry_wait=retry_wait, url_timeout=url_timeout, show_battery=show_battery,
                                     get_soilad=get_soilad, log_unknown_fields=log_unknown_fields, debug=self.debug)
@@ -1933,6 +2106,7 @@ class EcowittHttpCollector:
             data['debug.usr_interval'] *= 60
         data['datetime'] = timestamp
         data.update(dev.get_sensors_data())
+        data = self.sensor_mapper.apply(data)
         if weewx.debug >= 3:
             log.debug('Current data: %s', data)
         return data
@@ -1985,7 +2159,7 @@ class EcowittHttpApi:
         self.retry_wait = DEFAULT_RETRY_WAIT if retry_wait is None else retry_wait
         self.timeout = timeout or DEFAULT_URL_TIMEOUT
 
-    def request(self, command_str, data=None, headers=None):
+    def request(self, command_str, data=None, headers=None, rename=True):
         """Send an API command and return the deserialised JSON (None if undecodable)."""
         if command_str not in self.commands:
             raise UnknownApiCommand(f"Unknown HTTP API command '{command_str}'")
@@ -2006,7 +2180,7 @@ class EcowittHttpApi:
                 log.error('URL - Failed to get device data on attempt %d of %d', attempt, self.max_tries)
                 log.error('   **** %s', e)
                 raise
-        for old, new in self.sensor_rename_map.items():
+        for old, new in self.sensor_rename_map.items() if rename else ():
             resp = resp.replace(old, new)
         try:
             resp_json = json.loads(resp)
@@ -2873,6 +3047,18 @@ def bytes_to_hex(iterable, separator=' ', caps=True):
         return f"cannot represent '{iterable}' as hexadecimal bytes"
 
 
+_SECRET_KEY = re.compile(r'pwd|pass|key|token|secret|_id$', re.IGNORECASE)
+
+
+def mask_secrets(value, key=''):
+    """A copy of a decoded API response with passwords, keys and station IDs obfuscated."""
+    if isinstance(value, dict):
+        return {k: mask_secrets(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [mask_secrets(v, key) for v in value]
+    return obfuscate(str(value)) if value and _SECRET_KEY.search(str(key)) else value
+
+
 def obfuscate(plain, obf_char='*'):
     """Obfuscate all but the last few characters of a string."""
     if not plain:
@@ -2933,6 +3119,7 @@ class DirectEcowittDevice:
                (('lds_offset',), 'display_lds_offset'), (('calibration',), 'display_calibration'),
                (('soil_calibration',), 'display_soil_calibration'), (('services',), 'display_services'),
                (('mac',), 'display_mac'), (('firmware',), 'display_firmware'), (('sensors',), 'display_sensors'),
+               (('list_sensors',), 'display_sensor_list'), (('dump_api',), 'dump_api'),
                (('live',), 'display_live_data'), (('discover',), 'display_discovered_devices'),
                (('map',), 'display_field_map'), (('driver_map',), 'display_driver_field_map'),
                (('service_map',), 'display_service_field_map'))
@@ -3362,9 +3549,121 @@ class DirectEcowittDevice:
                 name = ' '.join([model, channel]).upper()
                 print(f'{name:<10} {id_str:<25} {details}')
 
+    def sensor_map(self):
+        """The [[sensor_map]] settings, or None with --no-sensor-map."""
+        return None if self.opt('no_sensor_map') else self.stn_dict.get('sensor_map')
+
+    def print_sensor_map(self, mapper):
+        if not mapper:
+            return
+        print(f'Sensor map: {len(mapper.targets)} sensor(s) locked to channels by hardware ID')
+        for line in mapper.problems + mapper.lines or ['every mapped sensor is already on its channel']:
+            print(f'    {line}')
+        print()
+
+    def display_sensor_list(self):
+        """List sensors by hardware ID: gateway channel, reported channel and WeeWX fields."""
+        device, data = self.query(lambda d: (d.get_sensors_data(connected_only=False), d.get_live_data()))
+        if device is None:
+            return
+        sensors, live = data
+        mapper = SensorMapper(self.sensor_map())
+        mapper.plan(sensors)
+        field_map = HttpMapper(driver_debug=None, **self.stn_dict).field_map
+        paired = SensorMapper.paired(sensors)
+        print()
+        self.print_sensor_map(mapper)
+        rows = [('Sensor', 'ID', 'Signal', 'Battery', 'Reading', 'Reported as', 'WeeWX fields')]
+        for model, (count, groups) in SENSOR_GROUPS.items():
+            for channel, sid in sorted(paired.get(model, {}).items()):
+                reported = mapper.reported_channel(model, channel)
+                keys = channel_keys(model, reported)
+                fields = natural_sort_keys({w: 0 for w, src in field_map.items() if src.startswith(tuple(keys))})
+                readings = [f"{live[k]}{_READING_UNIT.get(f, '')}" for g in groups for f in _SENSOR_READING[g]
+                            for k in (f'{g}.{channel}.{f}',) if live.get(k) is not None]
+                rows.append((f'{model.upper()} CH{channel}', sid, self._signal(sensors, f'{model}.ch{channel}'),
+                             self._battery(sensors, f'{model}.ch{channel}'), ' / '.join(readings) or '--',
+                             f'CH{reported}' + ('' if reported == channel else ' (mapped)'),
+                             ', '.join(fields) or '(none)'))
+        single = [m for m in self.sensor_display_order if m not in SENSOR_GROUPS
+                  and str(sensors.get(f'{m}.id', 'FFFFFFFF')).upper() not in _UNREGISTERED_IDS]
+        for model in single:
+            fields = natural_sort_keys({w: 0 for w, src in field_map.items() if src.startswith(f'{model}.')})
+            rows.append((model.upper(), str(sensors[f'{model}.id']), self._signal(sensors, model),
+                         self._battery(sensors, model), '', 'fixed', ', '.join(fields) or '(none)'))
+        if len(rows) == 1:
+            print(f'Device at {self.ip_address} did not report any registered sensors.')
+            return
+        widths = [max(len(str(r[i])) for r in rows) for i in range(6)]
+        for n, row in enumerate(rows):
+            text = '  '.join(f'{str(v):<{w}}' for v, w in zip(row, widths))
+            indent = len(text) + 2
+            wrapped = textwrap.wrap(row[6], width=max(30, 120 - indent)) or ['']
+            print(f'{text}  {wrapped[0]}')
+            for more in wrapped[1:]:
+                print(' ' * indent + more)
+            if n == 0:
+                print('-' * min(120, indent + max(len(r[6]) for r in rows)))
+        locked = [(model, channel, sid) for model in SENSOR_GROUPS
+                  for channel, sid in sorted(paired.get(model, {}).items())]
+        if locked:
+            print()
+            print('To keep each sensor on the channel it is reported on now, even if it is re-paired')
+            print('onto a different gateway channel, add this to [EcowittGateway] in weewx.conf:')
+            print()
+            print('    [[sensor_map]]')
+            for model, channel, sid in locked:
+                reported = mapper.reported_channel(model, channel)
+                print(f"        {sid} = {reported}{' ' * max(1, 10 - len(sid) - len(str(reported)))}"
+                      f'# {model.upper()}')
+
+    @staticmethod
+    def _signal(sensors, prefix):
+        signal, rssi = sensors.get(f'{prefix}.signal'), sensors.get(f'{prefix}.rssi')
+        return f"{'--' if signal is None else signal}/4" + ('' if rssi is None else f' {rssi}dBm')
+
+    @staticmethod
+    def _battery(sensors, prefix):
+        batt = sensors.get(f'{prefix}.battery')
+        return '--' if batt is None else str(batt)
+
+    def dump_api(self):
+        """Save every raw API response as one JSON document, for fault reports and new sensors."""
+        if not self.ip_address:
+            print()
+            print('No device IP address: use --ip-address or set ip_address in weewx.conf')
+            return
+        api = EcowittHttpApi(self.ip_address, max_tries=self.opt('max_tries'), retry_wait=self.opt('retry_wait'),
+                             timeout=self.opt('timeout'))
+        unmask = bool(self.opt('unmask'))
+        result = {'_about': {'driver': f'{DRIVER_MODULE} {DRIVER_VERSION}', 'ip_address': self.ip_address,
+                             'time': timestamp_to_string(int(time.time())), 'secrets_masked': not unmask}}
+        print()
+        print(f'Reading every API response from {self.ip_address}...')
+        for command in api.commands:
+            for page in (1, 2, 3, 4, 5) if command == 'get_sensors_info' else (None,):
+                label = command if page is None else f'{command}?page={page}'
+                try:
+                    resp = api.request(command, data=None if page is None else {'page': page}, rename=False)
+                except OSError as e:
+                    resp = {'_error': str(e)}
+                result[label] = resp if unmask else mask_secrets(resp)
+        text = json.dumps(result, indent=2)
+        output = self.opt('output')
+        if output:
+            with open(output, 'w') as f:
+                f.write(text + '\n')
+            print(f'Saved {len(result) - 1} responses to {output}')
+        else:
+            print()
+            print(text)
+        if not unmask:
+            print('Passwords, keys and station IDs are masked; use --unmask to include them.')
+
     def display_live_data(self):
         try:
-            collector = EcowittHttpCollector(ip_address=self.ip_address, show_battery=self.show_battery)
+            collector = EcowittHttpCollector(ip_address=self.ip_address, show_battery=self.show_battery,
+                                             sensor_map=self.sensor_map())
             print()
             print(f'Interrogating {collector.device.model} at {self.ip_address}')
             current_data = collector.get_current_data()
@@ -3395,6 +3694,7 @@ class DirectEcowittDevice:
         print()
         print(f'Displaying data using the WeeWX {weewx.units.unit_nicknames.get(unit_system)} unit group.')
         print()
+        self.print_sensor_map(collector.sensor_mapper)
         print(f'{collector.device.model} live sensor data ({timestamp_to_string(ts)}): '
               f'{weeutil.weeutil.to_sorted_string(result)}')
 
@@ -3540,6 +3840,8 @@ class DirectEcowittDevice:
                          ('retry_wait', 'retry_wait'), ('timeout', 'url_timeout')):
             if self.opt(opt):
                 self.stn_dict[key] = self.opt(opt)
+        if self.opt('no_sensor_map'):
+            self.stn_dict.pop('sensor_map', None)
         driver = None
         try:
             driver = EcowittHttpDriver(html_dir=self.html_dir, **self.stn_dict)
@@ -3547,6 +3849,10 @@ class DirectEcowittDevice:
             print()
             print(f'Interrogating {BOLD}{device.model}{ENDC} at {BOLD}{device.ip_address}{ENDC}')
             print()
+            mapper = driver.collector.sensor_mapper
+            if mapper:
+                mapper.plan(device.get_sensors_data())
+                self.print_sensor_map(mapper)
             action(driver)
         except DeviceIOError as e:
             print()
@@ -3629,8 +3935,14 @@ def main():
                 --live-data
                      [CONFIG_FILE|--config=CONFIG_FILE]
                      [--units=us|metric|metricwx]
-                     [--ip-address=IP_ADDRESS]
+                     [--ip-address=IP_ADDRESS] [--no-sensor-map]
                      [--show-all-batt] [--debug=0|1|2|3]
+                --list-sensors
+                     [CONFIG_FILE|--config=CONFIG_FILE]
+                     [--ip-address=IP_ADDRESS] [--no-sensor-map]
+                --dump-api
+                     [CONFIG_FILE|--config=CONFIG_FILE]
+                     [--ip-address=IP_ADDRESS] [--output=FILE] [--unmask]
                 --weewx-fields
                      [CONFIG_FILE|--config=CONFIG_FILE]
                      [--ip-address=IP_ADDRESS]
@@ -3649,6 +3961,10 @@ def main():
             ('--discover', 'discover', 'display details of discovered devices'),
             ('--live-data', 'live', 'display device live sensor data'),
             ('--sensors', 'sensors', 'display device sensor data'),
+            ('--list-sensors', 'list_sensors',
+             'list multi-channel sensors by hardware ID with their channels and WeeWX fields'),
+            ('--dump-api', 'dump_api', 'save every raw API response as JSON (passwords masked)'),
+            ('--no-sensor-map', 'no_sensor_map', 'ignore [[sensor_map]] and show gateway channels'),
             ('--test-driver', 'test_driver', 'exercise the driver'),
             ('--test-service', 'test_service', 'exercise the driver as a WeeWX service'),
             ('--weewx-fields', 'weewx_fields', 'display WeeWX loop packet fields emitted by the current configuration'),
@@ -3687,6 +4003,7 @@ def main():
     parser.add_argument('--units', dest='units', metavar='UNIT SYSTEM',
                         default=weewx.units.unit_nicknames[DEFAULT_UNIT_SYSTEM],
                         help='unit system to use when displaying live data')
+    parser.add_argument('--output', dest='output', metavar='FILE', help='file for --dump-api output')
     parser.add_argument('--config', dest='config', metavar='CONFIG_FILE', help='Use configuration file CONFIG_FILE.')
     namespace = parser.parse_args()
     if len(sys.argv) == 1:

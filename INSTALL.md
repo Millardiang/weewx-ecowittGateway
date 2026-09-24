@@ -19,6 +19,8 @@ the WSView Plus app, on your router, or with the `--discover` tool described at 
    curl http://192.168.1.100/get_version
    ```
    You should get a line of JSON such as `{"version":"Version: GW2000A_V3.1.2", ...}`.
+   A GW1000 or WH2650 has no HTTP API, so `curl` fails. Instead, check that TCP port 45000 can be
+   reached, for example with `nc -zv 192.168.1.100 45000`. The installer finds it on that port.
 2. **Give the gateway a fixed IP address** (a DHCP reservation on your router), so it doesn't change.
 3. **Back up `weewx.conf`.** The installer saves a timestamped copy too, but it's good practice.
 4. **If you're replacing `ecowitt_http.py`**, don't run both at once. Follow the
@@ -80,7 +82,9 @@ Publish each loop packet to an MQTT broker? (y/n) [n]: y
     Retain the latest messages on the broker? (y/n) [n]:
 ```
 
-- **IP address:** the installer contacts the gateway to check the address. If there's no answer,
+- **IP address:** the installer contacts the gateway to check the address. A GW1000 or WH2650 is
+  found through its TCP API and shown as, for example, `Found GW1000_V1.7.7 (TCP API)`. For these,
+  the catchup question offers only `net`, `none` or `either`, because they have no SD card. If there's no answer,
   it asks whether to use the address anyway or try another.
 - **Rain gauges:** the installer reads which gauges are paired. With only one type paired it uses
   that gauge without asking. With both types paired (or if it can't tell) it offers:
@@ -126,7 +130,7 @@ It saves the default settings with `ip_address = replace_me` and doesn't change 
 
 ```bash
 # 1. Install the extension and answer the prompts
-sudo weectl extension install weewx-EcowittGateway-0.0.1b7.zip
+sudo weectl extension install weewx-EcowittGateway-0.0.1b8.zip
 
 # 2. Check it can talk to the gateway
 sudo weectl device --live-data
@@ -139,7 +143,7 @@ sudo journalctl -u weewx -f
 When it's working, the log shows lines like:
 
 ```
-EcowittHttpDriver: version is 0.0.1b7
+EcowittHttpDriver: version is 0.0.1b8
      device IP address is 192.168.1.100
 EcowittHttpCollector startup
 Using 'rain.0x13.val' for rain total
@@ -151,7 +155,7 @@ Using 'rain.0x13.val' for rain total
 sudo systemctl stop weewx
 sudo weectl extension list                       # note the old extension's name
 sudo weectl extension uninstall <old-name>       # or delete /etc/weewx/bin/user/ecowitt_http.py
-sudo weectl extension install weewx-EcowittGateway-0.0.1b7.zip
+sudo weectl extension install weewx-EcowittGateway-0.0.1b8.zip
 sudo systemctl start weewx
 ```
 
@@ -212,7 +216,7 @@ source ~/weewx-venv/bin/activate
 source ~/weewx-venv/bin/activate
 
 # 1. Install the extension and answer the prompts
-weectl extension install weewx-EcowittGateway-0.0.1b7.zip
+weectl extension install weewx-EcowittGateway-0.0.1b8.zip
 
 # 2. Check it can talk to the gateway
 weectl device --live-data
@@ -234,7 +238,7 @@ source ~/weewx-venv/bin/activate
 sudo systemctl stop weewx                        # or stop weewxd
 weectl extension list
 weectl extension uninstall <old-name>            # or delete ~/weewx-data/bin/user/ecowitt_http.py
-weectl extension install weewx-EcowittGateway-0.0.1b7.zip
+weectl extension install weewx-EcowittGateway-0.0.1b8.zip
 sudo systemctl start weewx
 ```
 

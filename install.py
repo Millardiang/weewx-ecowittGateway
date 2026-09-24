@@ -41,7 +41,7 @@ import weewx
 
 from weecfg.extension import ExtensionInstaller
 
-VERSION = '0.0.1b7'
+VERSION = '0.0.1b8'
 MODULE = 'weewx-EcowittGateway'
 SECTION = 'EcowittGateway'
 LEGACY_SECTION = 'EcowittHttp'
@@ -80,6 +80,11 @@ DRIVER_CONFIG = f"""
 
     # IP address of the gateway/console, eg 192.168.1.100
     ip_address = replace_me
+    # device API: auto, http (GW1100/GW2000 and consoles) or tcp (GW1000/WH2650,
+    # which have no local HTTP API); auto picks the right one
+    api = auto
+    # port of the TCP API
+    tcp_port = 45000
 
     # how often to poll the device (seconds)
     poll_interval = 20
@@ -147,6 +152,9 @@ DRIVER_CONFIG = f"""
 """
 
 TIPPING_MODELS = ('wh40', 'wh69', 'wn20')
+# TCP API (GW1000) sensor addresses: (model, first address, channels, first channel)
+TCP_CHANNEL_ADDRESSES = (('wn31', 6, 8, 1), ('wh51', 14, 8, 1), ('wh41', 22, 4, 1), ('wh55', 27, 4, 1),
+                         ('wn34', 31, 8, 1), ('wn35', 40, 8, 1), ('wh51', 58, 8, 9))
 # multi-channel sensor models (the API still reports some by their older WHnn names)
 CHANNEL_MODELS = {'wn31': 'wn31', 'wh31': 'wn31', 'wn34': 'wn34', 'wh34': 'wn34', 'wn35': 'wn35', 'wh35': 'wn35',
                   'wh41': 'wh41', 'wh51': 'wh51', 'wh54': 'wh54', 'wh55': 'wh55'}
@@ -177,7 +185,7 @@ class EcowittGatewayInstaller(ExtensionInstaller):
         super().__init__(
             version=VERSION,
             name='weewx-EcowittGateway',
-            description='WeeWX driver/service for Ecowitt gateways and consoles using the local HTTP API.',
+            description='WeeWX driver/service for Ecowitt gateways and consoles (local HTTP API, or TCP API for the GW1000).',
             author='Ian Millard',
             author_email='',
             files=[('bin/user', [f'bin/user/{MODULE}.py'])],
@@ -219,12 +227,57 @@ class EcowittGatewayInstaller(ExtensionInstaller):
         with urllib.request.urlopen(f'http://{ip}/{command}?{query}', timeout=5) as resp:
             return json.loads(resp.read().decode('utf-8'))
 
+    @staticmethod
+    def _tcp(ip, cmd, port=45000):
+        """Data from a binary TCP API command (GW1000/WH2650), or None."""
+        try:
+            body = bytes([cmd, 3])
+            with socket.create_connection((ip.split(':')[0], port), timeout=5) as sock:
+                sock.sendall(b'\xff\xff' + body + bytes([sum(body) & 0xFF]))
+                resp = b''
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    resp += chunk
+                    size_len = 2 if cmd == 0x3C else 1
+                    if len(resp) >= 3 + size_len and len(resp) >= 2 + int.from_bytes(resp[3:3 + size_len], 'big'):
+                        break
+        except OSError:
+            return None
+        if len(resp) < 5 or resp[:2] != b'\xff\xff' or resp[2] != cmd or sum(resp[2:-1]) & 0xFF != resp[-1]:
+            return None
+        return resp[(5 if cmd == 0x3C else 4):-1]
+
+    def _probe_tcp(self, ip):
+        """_probe() for a GW1000/WH2650 over the TCP API."""
+        firmware = self._tcp(ip, 0x50)
+        if not firmware:
+            return None, None, None
+        model = firmware[1:1 + firmware[0]].decode('ascii', 'replace')
+        gauges, channels = set(), []
+        data = self._tcp(ip, 0x3C) or b''
+        for n in range(0, len(data) - 6, 7):
+            address, sid = data[n], int.from_bytes(data[n + 1:n + 5], 'big')
+            if sid in (0xFFFFFFFE, 0xFFFFFFFF):
+                continue
+            if address == 3:
+                gauges.add('tipping')
+            elif address == 48:
+                gauges.add('piezo')
+            for tcp_model, first, count, ch1 in TCP_CHANNEL_ADDRESSES:
+                if first <= address < first + count:
+                    channels.append((tcp_model, address - first + ch1, f'{sid:X}'))
+        order = list(dict.fromkeys(CHANNEL_MODELS.values()))
+        channels.sort(key=lambda c: (order.index(c[0]), c[1]))
+        return f'{model} (TCP API)', gauges, channels
+
     def _probe(self, ip):
         """Return (model, set of paired gauge types, [(sensor model, channel, ID)]) or Nones if unreachable."""
         try:
             version = self._get_json(ip, 'get_version').get('version', '')
         except Exception:
-            return None, None, None
+            return self._probe_tcp(ip)
         gauges, channels = set(), []
         try:
             for page in range(1, 6):
@@ -320,7 +373,13 @@ class EcowittGatewayInstaller(ExtensionInstaller):
                 rain_source = self._ask('Rain gauges to use', rain_source, ['both', 'tipping', 'piezo'])
 
         catchup = existing.get('catchup', {}).get('source', 'either')
-        catchup = self._ask('Fetch missed data at startup from', catchup, ['either', 'device', 'net', 'none'])
+        if model and model.endswith('(TCP API)'):
+            out('    This gateway has no SD card or local HTTP API, so missed data can only come')
+            out('    from Ecowitt.net (net), and only if it uploads there.')
+            catchup = self._ask('Fetch missed data at startup from', 'net' if catchup == 'device' else catchup,
+                                ['net', 'none', 'either'])
+        else:
+            catchup = self._ask('Fetch missed data at startup from', catchup, ['either', 'device', 'net', 'none'])
         api_key, app_key = existing.get('api_key', ''), existing.get('app_key', '')
         if catchup in ('either', 'net') and self._interactive():
             out('    Ecowitt.net keys are only needed to fetch missed data from Ecowitt.net')

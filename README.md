@@ -4,10 +4,10 @@ A [WeeWX](https://weewx.com) driver and service for Ecowitt gateways and console
 **local HTTP API**. There's no cloud dependency for live data, and the gateway doesn't need any
 custom-server or upload configuration.
 
-**Version:** 0.0.1 beta 7 (`0.0.1b7`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
+**Version:** 0.0.1 beta 8 (`0.0.1b8`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
 
 This is a compact rewrite of `ecowitt_http.py`. It keeps the same
-configuration, field names and command-line tools, fixes a number of bugs and is about 75% smaller.
+configuration, field names and command-line tools, fixes a number of bugs and is about 80% smaller.
 See [CHANGELOG.md](CHANGELOG.md).
 
 ---
@@ -19,6 +19,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Running as a service](#running-as-a-service)
+- [GW1000 and WH2650](#gw1000-and-wh2650)
 - [Rain and lightning](#rain-and-lightning)
 - [Loop data file (ecwLoop.json)](#loop-data-file-ecwloopjson)
 - [MQTT](#mqtt)
@@ -34,9 +35,10 @@ See [CHANGELOG.md](CHANGELOG.md).
 
 ## Supported hardware
 
-**Gateways and consoles:** GW1100, GW1200, GW2000, GW3000, WN1700, WN1820, WN1821, WN1920, WN1980,
-WS3800, WS3820, WS3900, WS3910, WS6210.
-The GW1000 does not have the local HTTP API and is **not** supported.
+**Gateways and consoles:** GW1000, WH2650, GW1100, GW1200, GW2000, GW3000, WN1700, WN1820, WN1821,
+WN1920, WN1980, WS3800, WS3820, WS3900, WS3910, WS6210.
+The GW1000 and WH2650 have no local HTTP API, so they're read through Ecowitt's TCP API instead;
+this is automatic. See [GW1000 and WH2650](#gw1000-and-wh2650) for what that API provides.
 
 **Sensors:**
 
@@ -93,7 +95,7 @@ WeeWX 5.4.0 or later.
 In short:
 
 ```bash
-weectl extension install weewx-EcowittGateway-0.0.1b7.zip
+weectl extension install weewx-EcowittGateway-0.0.1b8.zip
 sudo systemctl restart weewx
 ```
 
@@ -153,6 +155,7 @@ earlier betas) if there is no `[EcowittGateway]` section; the installer moves it
 | `wn32_outdoor` | `False` | Report WH26 battery/signal as an outdoor WN32P instead. |
 | `debug` | *(none)* | Comma-separated list of extra logging: `rain`, `raindelta`, `wind`, `lightning`, `loop`, `sensors`, `parser`, `catchup`, `collector`, `archive`. |
 | `api_key`, `app_key` | *(none)* | Ecowitt.net keys; only needed for Ecowitt.net catchup. |
+| `api`, `tcp_port` | `auto`, `45000` | Which device API to use. See [GW1000 and WH2650](#gw1000-and-wh2650). |
 | `[[sensor_map]]` | | Report multi-channel sensors on fixed channels by hardware ID. See [Sensor mapping](#sensor-mapping-hardware-ids). |
 | `[[loop_json]]` | | Write each loop packet to `ecwLoop.json`. See [Loop data file](#loop-data-file-ecwloopjson). |
 | `[[mqtt]]` | | Publish each loop packet to an MQTT broker. See [MQTT](#mqtt). |
@@ -306,6 +309,54 @@ The driver also publishes `online` or `offline` to `<topic>/status`, retained. T
 The connection is made in the background, so WeeWX starts even if the broker is down. The driver
 reconnects automatically, backing off up to once a minute. Publishing problems are logged once, and
 a message is logged when the connection is restored.
+
+---
+
+## GW1000 and WH2650
+
+The GW1000 (and the WH2650, which is the same hardware) has no local HTTP API. The driver reads
+it through Ecowitt's binary **TCP API** on port 45000 instead. With the default `api = auto`, the
+driver asks the TCP API for the model at start-up, uses it for a GW1000 or WH2650, and uses the HTTP
+API for everything else. Nothing needs setting by hand.
+
+```ini
+[EcowittGateway]
+    ip_address = 192.168.1.101
+    api = auto          # auto | http | tcp
+    tcp_port = 45000    # only change this if you forward the port
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `api` | `auto` | `auto` detects the right API. `tcp` forces the TCP API (GW1000/WH2650); `http` forces the HTTP API. |
+| `tcp_port` | `45000` | Port of the TCP API. |
+
+Everything the rest of the driver does works the same way on a GW1000: the default field map, rain
+and lightning, `rain_source`, the sensor map, `ecwLoop.json`, MQTT and service mode. The fields come
+out with the same names and units as on an HTTP gateway.
+
+The TCP API provides less than the HTTP API, so on a GW1000:
+
+- **Live data and sensors:** outdoor, indoor and pressure readings, wind, solar and UV, tipping and
+  piezo rain, WN31, WN34, WN35, WH41, WH45/WH46, WH51, WH55 and WH57 data, rain gains and reset
+  times, and sensor IDs, signal and battery. Battery voltages are reported for the WH40, WH51,
+  WH68, WN34, WN35, WS80 and WS90, as the protocol gives them. RSSI is not available.
+- **Calculated fields:** feels-like temperature, apparent temperature and VPD, which the HTTP API
+  calculates in the gateway, aren't provided. WeeWX can calculate `appTemp` itself
+  (`[StdWXCalculate]`).
+- **Solar radiation:** the TCP API gives light in lux, which the driver converts to W/m² with the same
+  factor (126.7 lux per W/m²) the driver uses elsewhere.
+- **Missed data (catchup):** the GW1000 has no SD card, so missed data can only come from Ecowitt.net
+  (`[[catchup]] source = net` or `either`, with your API keys). `source = device` is skipped with a
+  log message.
+- **Command-line tools:** `--live-data`, `--sensors`, `--list-sensors`, `--firmware`,
+  `--mac-address`, `--test-driver`, `--test-service` and `--dump-api` work. The calibration, system
+  and services commands say they aren't available. Firmware update checks aren't possible.
+- **`--dump-api`** saves the raw TCP responses as hex.
+
+A GW1000 must be on firmware that supports the `CMD_GW1000_LIVEDATA` command (any recent firmware
+does). If the gateway sends an item the driver doesn't know, the driver logs it once and uses the
+items before it.
 
 ---
 
@@ -523,6 +574,7 @@ each install type.
 
 | Symptom | What to check |
 |---|---|
+| A GW1000 isn't found | Check that TCP port 45000 on the gateway can be reached from the WeeWX machine. Try `weectl device --firmware`. |
 | `device IP address cannot be None` | Set `ip_address` in `[EcowittGateway]`. |
 | `Unable to obtain live sensor data` / `DeviceIOError` | Check the IP address and that the gateway is powered on and on the network. Try opening `http://<ip>/get_livedata_info` in a browser. |
 | WeeWX exits at start-up when the gateway is offline | Set `loop_on_init = 1`. |
@@ -542,8 +594,8 @@ Logs:
 
 See **[VERSIONING.md](VERSIONING.md)**. In brief:
 
-- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b7`);
-- the current release is the seventh beta;
+- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b8`);
+- the current release is the eighth beta;
 - configuration compatibility with `ecowitt_http.py` is kept throughout 0.x.
 
 ---

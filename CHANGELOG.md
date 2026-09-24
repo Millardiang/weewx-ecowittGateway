@@ -8,6 +8,35 @@ follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 Nothing yet.
 
+## [0.0.1b8] – 24 September 2026 — eighth beta
+
+### Added
+
+- **GW1000 and WH2650 support.** These gateways have no local HTTP API, so the driver reads them
+  through Ecowitt's binary TCP API (port 45000).
+  - The new `api` option (`auto`, `http` or `tcp`, default `auto`) chooses the API. `auto` asks the
+    TCP API for the model and uses it for a GW1000/WH2650, and the HTTP API for everything else,
+    with the TCP API as a fallback. If neither API answers, detection is tried again at the next poll.
+  - `tcp_port` (default 45000) sets the TCP API port.
+  - TCP data uses the same field names and units as HTTP data. The field map, rain and lightning
+    handling, `rain_source`, sensor map, `ecwLoop.json`, MQTT and service mode all work unchanged.
+  - Decoded: indoor, outdoor and pressure readings; wind; solar (lux converted to W/m²) and UV;
+    tipping and piezo rain with gains and reset times; lightning; WN31, WN34 (with battery voltage),
+    WN35, WH41, WH45, WH46, WH51 (channels 1–16) and WH55; and sensor IDs, signal and battery. The
+    battery voltage is used for sensors whose battery byte is a voltage.
+  - Unknown data items are logged once, and the items before them are kept.
+  - Catchup from the device is skipped, because there's no SD card. Ecowitt.net catchup works.
+  - `--live-data`, `--sensors`, `--list-sensors`, `--firmware`, `--mac-address`, `--test-driver` and
+    `--dump-api` (hex output) work. The other commands report that the TCP API doesn't provide
+    their data.
+  - `--api=auto|http|tcp` on the command line overrides the setting.
+- **Installer:** finds a GW1000/WH2650 through the TCP API, reads its paired sensors and rain gauges,
+  and offers only `net`, `none` or `either` for catchup.
+
+### Changed
+
+- The GW1000 is now listed as supported by `--discover`.
+
 ## [0.0.1b7] – 24 September 2026 — seventh beta
 
 ### Added
@@ -254,6 +283,7 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
 [Unreleased]: #unreleased
+[0.0.1b8]: #001b8--24-september-2026--eighth-beta
 [0.0.1b7]: #001b7--24-september-2026--seventh-beta
 [0.0.1b6]: #001b6--24-september-2026--sixth-beta
 [0.0.1b5]: #001b5--24-september-2026--fifth-beta

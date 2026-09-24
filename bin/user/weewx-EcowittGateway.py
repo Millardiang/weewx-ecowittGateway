@@ -22,7 +22,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 0.0.1 beta 3
+Version: 0.0.1 beta 4
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -81,7 +81,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '0.0.1b3'
+DRIVER_VERSION = '0.0.1b4'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -911,8 +911,12 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
         self.catchup_grace = weeutil.weeutil.to_int(catchup.get('grace', DEFAULT_CATCHUP_GRACE))
         self.catchup_retries = weeutil.weeutil.to_int(catchup.get('retries', DEFAULT_CATCHUP_RETRIES))
         self.rain_source = str(stn_dict.get('rain_source', 'tipping')).lower()
-        log.info("WeeWX 'rain' and 'rainRate' are taken from the %s gauge",
-                 'piezo' if self.rain_source == 'piezo' else 'tipping')
+        if self.rain_source not in ('tipping', 'piezo', 'both'):
+            log.error("Unknown rain_source '%s', using 'tipping'", self.rain_source)
+            self.rain_source = 'tipping'
+        log.info("WeeWX 'rain' and 'rainRate' are taken from the %s gauge%s",
+                 'piezo' if self.rain_source == 'piezo' else 'tipping',
+                 "; the piezo gauge is recorded in 'p_rain'/'hail'" if self.rain_source == 'both' else '')
         self.rain_a, self.piezo_a, self.lightning_a = self._trackers('Archive: ')
         self.collector.startup()
 
@@ -1164,29 +1168,19 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
         curr_e_src = mapper.field_map.get(curr_w_src) if curr_w_src is not None else None
         curr_type = ('tipping' if curr_e_src in cls.t_src_fields else
                      'piezo' if curr_e_src in cls.p_src_fields else 'none')
-        possible = {'both': ['tipping', 'piezo', 'none'], 'tipping': ['tipping', 'none'],
+        possible = {'both': ['both', 'tipping', 'piezo', 'none'], 'tipping': ['tipping', 'none'],
                     'piezo': ['piezo', 'none']}[paired_gauges]
-        choices = ', '.join(f"'{p}' to populate the WeeWX rain fields from a paired {p} gauge"
-                            for p in possible[:-1])
+        default = curr_type if curr_type != 'none' or paired_gauges != 'both' else 'both'
         print()
         user_type = weecfg.prompt_with_options(cls._wrap(
-            "By default, per-period rainfall values and rain rates will appear in fields 'rain'/'rainRate' and "
-            "'p_rain'/'p_rainrate for paired tipping and piezo rain gauges respectively. WeeWX can populate the "
-            "default WeeWX rain observations ('rain' and 'rainRate') from either a paired tipping or piezo rain "
-            f"gauge. Set to {choices} or 'none' to not populate the WeeWX rain fields."),
-            curr_type, possible).lower()
-        if user_type in ('tipping', 'piezo'):
-            src_fields, rain_field, other = {'tipping': (cls.t_src_fields, 'rain', 'p_rain'),
-                                             'piezo': (cls.p_src_fields, 'p_rain', 'rain')}[user_type]
-            fields = [mapper.field_map.inverse[f] for f in src_fields if f in mapper.field_map.inverse]
-            default_source = (curr_w_src if curr_type == user_type and curr_w_src is not None
-                              else (fields[0] if fields else None))
+            "Choose how the rain gauges are recorded: 'both' records the tipping gauge in 'rain'/'rainRate' and "
+            "the piezo gauge in 'p_rain'/'hail'/'p_rainrate'; 'tipping' or 'piezo' feeds WeeWX 'rain'/'rainRate' "
+            "from that gauge; 'none' leaves the WeeWX rain fields unpopulated."),
+            default, possible).lower()
+        if user_type in ('tipping', 'piezo', 'both'):
+            rain_field, other = {'tipping': ('rain', 'p_rain'), 'both': ('rain', 'p_rain'),
+                                 'piezo': ('p_rain', 'rain')}[user_type]
             add_back = None if curr_type == user_type else other
-            print()
-            options = fields + ([default_source] if default_source and default_source not in fields else [])
-            weecfg.prompt_with_options(cls._wrap(
-                "Select the WeeWX observation to be used to derive WeeWX observation 'rain'. "
-                f"Possible observations are {' or '.join(fields)}."), default_source, options or None)
             cls._merge(config_dict, """
                 [StdWXCalculate]
                     [[Calculations]]

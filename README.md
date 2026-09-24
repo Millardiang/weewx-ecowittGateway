@@ -4,7 +4,7 @@ A [WeeWX](https://weewx.com) driver and service for Ecowitt gateways and console
 **local HTTP API**. There's no cloud dependency for live data, and the gateway doesn't need any
 custom-server or upload configuration.
 
-**Version:** 0.0.1 beta 3 (`0.0.1b3`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
+**Version:** 0.0.1 beta 4 (`0.0.1b4`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
 
 This is a compact rewrite of `ecowitt_http.py`. It keeps the same
 configuration, field names and command-line tools, fixes a number of bugs and is about 80% smaller.
@@ -90,7 +90,7 @@ WeeWX 5.4.0 or later.
 In short:
 
 ```bash
-weectl extension install weewx-EcowittGateway-0.0.1b3.zip
+weectl extension install weewx-EcowittGateway-0.0.1b4.zip
 sudo systemctl restart weewx
 ```
 
@@ -103,7 +103,7 @@ The installer asks for your settings, so there's nothing to edit in `weewx.conf`
 | Gateway IP address (checked by contacting the gateway) | — |
 | Poll interval | 20 seconds |
 | Use as the station driver, as a service alongside another driver, or skip | driver |
-| Which gauge feeds WeeWX `rain`/`rainRate` (asked only if both gauge types are paired) | tipping |
+| Rain gauges to use: `both`, `tipping` or `piezo` (asked only if both gauge types are paired, or none were found) | both |
 | Where to fetch missed data from at start-up, and Ecowitt.net keys if needed | either |
 | Show battery state for sensors with no signal | no |
 | Keep retrying at start-up if the gateway can't be reached (`loop_on_init`) | yes |
@@ -138,7 +138,7 @@ earlier betas) if there is no `[EcowittGateway]` section; the installer moves it
 | `max_tries` | `3` | Attempts per API request before giving up. |
 | `retry_wait` | `2` | Seconds to wait between attempts after a timeout. |
 | `url_timeout` | `10` | HTTP timeout in seconds. |
-| `rain_source` | `tipping` | Gauge that feeds WeeWX `rain` and `rainRate`: `tipping` or `piezo`. |
+| `rain_source` | `tipping` | `both`: tipping gauge in `rain`/`rainRate` and piezo gauge in `p_rain`/`hail`/`p_rainrate`. `tipping` or `piezo`: that gauge feeds `rain`/`rainRate`. |
 | `show_all_batt` | `False` | Report battery state even for sensors with no signal. |
 | `log_unknown_fields` | `False` | Log unknown API groups and fields at info level. |
 | `firmware_update_check_interval` | `86400` | Seconds between firmware update checks (`0` turns them off). Available updates are logged. |
@@ -214,15 +214,23 @@ total (or the monthly total if there is no yearly one).
 The first packet after start-up has no rain or strike delta (there's no previous total to compare
 with). When a total resets, for example at the start of a new year, the new total is used as the delta.
 
-WeeWX's standard `rain` and `rainRate` fields come from the gauge chosen with `rain_source`. The
-installer asks which one if both gauge types are paired, or you can set it directly:
+`rain_source` chooses how the gauges are used:
+
+| `rain_source` | WeeWX `rain` / `rainRate` | Piezo gauge |
+|---|---|---|
+| `both` | tipping gauge | recorded in `p_rain`, `hail`, `p_rainrate` |
+| `tipping` | tipping gauge | not used for WeeWX rain |
+| `piezo` | piezo gauge | also in `p_rain`, `hail`, `p_rainrate` |
+
+The installer asks when both gauge types are paired, with `both` as the default. You can also set it
+directly:
 
 ```ini
 [EcowittGateway]
-    rain_source = piezo     # tipping (the default) or piezo
+    rain_source = both     # both, tipping (the default if not set) or piezo
 ```
 
-The other gauge is still recorded, in `t_rain` or `p_rain`/`hail`.
+The tipping gauge's own amount is always in `t_rain`.
 
 ---
 
@@ -333,8 +341,8 @@ Logs:
 
 See **[VERSIONING.md](VERSIONING.md)**. In brief:
 
-- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b3`);
-- the current release is the third beta;
+- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b4`);
+- the current release is the fourth beta;
 - configuration compatibility with `ecowitt_http.py` is kept throughout 0.x.
 
 ---

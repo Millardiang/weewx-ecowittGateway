@@ -39,7 +39,10 @@ Gateway IP address, eg 192.168.1.100 [replace_me]: 192.168.1.100
 Poll interval in seconds [20]:
 Use as the station driver, as a service alongside another driver, or skip (driver/service/skip) [driver]:
     Paired rain gauges: piezo and tipping
-Which gauge should feed WeeWX 'rain' and 'rainRate' (tipping/piezo) [tipping]:
+    both    = record both gauges: tipping in 'rain'/'rainRate', piezo in 'p_rain'/'hail'/'p_rainrate'
+    tipping = WeeWX 'rain'/'rainRate' from the tipping gauge
+    piezo   = WeeWX 'rain'/'rainRate' from the piezo gauge
+Rain gauges to use (both/tipping/piezo) [both]:
 Fetch missed data at startup from (either/device/net/none) [either]:
     Ecowitt.net keys are only needed to fetch missed data from Ecowitt.net
     (press Enter to leave them blank).
@@ -51,8 +54,11 @@ Keep retrying at startup if the gateway cannot be reached (loop_on_init)? (y/n) 
 
 - **IP address:** the installer contacts the gateway to check the address. If there's no answer,
   it asks whether to use the address anyway or try another.
-- **Rain gauges:** the installer reads which gauges are paired. It only asks which one feeds WeeWX's
-  `rain`/`rainRate` when both types are paired.
+- **Rain gauges:** the installer reads which gauges are paired. With only one type paired it uses
+  that gauge without asking. With both types paired (or if it can't tell) it offers:
+  - `both` (the default): records both gauges, the tipping gauge in `rain`/`rainRate` and the piezo
+    gauge in `p_rain`/`hail`/`p_rainrate`;
+  - `tipping` or `piezo`: feeds WeeWX's `rain`/`rainRate` from that gauge.
 - **driver:** makes the gateway your station. The installer sets `station_type`, software archive
   records, `loop_on_init` and the rain calculation settings.
 - **service:** adds gateway data to another driver's loop packets. Your `station_type` is left alone.
@@ -82,7 +88,7 @@ It saves the default settings with `ip_address = replace_me` and doesn't change 
 
 ```bash
 # 1. Install the extension and answer the prompts
-sudo weectl extension install weewx-EcowittGateway-0.0.1b3.zip
+sudo weectl extension install weewx-EcowittGateway-0.0.1b4.zip
 
 # 2. Check it can talk to the gateway
 sudo weectl device --live-data
@@ -95,7 +101,7 @@ sudo journalctl -u weewx -f
 When it's working, the log shows lines like:
 
 ```
-EcowittHttpDriver: version is 0.0.1b3
+EcowittHttpDriver: version is 0.0.1b4
      device IP address is 192.168.1.100
 EcowittHttpCollector startup
 Using 'rain.0x13.val' for rain total
@@ -107,7 +113,7 @@ Using 'rain.0x13.val' for rain total
 sudo systemctl stop weewx
 sudo weectl extension list                       # note the old extension's name
 sudo weectl extension uninstall <old-name>       # or delete /etc/weewx/bin/user/ecowitt_http.py
-sudo weectl extension install weewx-EcowittGateway-0.0.1b3.zip
+sudo weectl extension install weewx-EcowittGateway-0.0.1b4.zip
 sudo systemctl start weewx
 ```
 
@@ -167,7 +173,7 @@ source ~/weewx-venv/bin/activate
 source ~/weewx-venv/bin/activate
 
 # 1. Install the extension and answer the prompts
-weectl extension install weewx-EcowittGateway-0.0.1b3.zip
+weectl extension install weewx-EcowittGateway-0.0.1b4.zip
 
 # 2. Check it can talk to the gateway
 weectl device --live-data
@@ -189,7 +195,7 @@ source ~/weewx-venv/bin/activate
 sudo systemctl stop weewx                        # or stop weewxd
 weectl extension list
 weectl extension uninstall <old-name>            # or delete ~/weewx-data/bin/user/ecowitt_http.py
-weectl extension install weewx-EcowittGateway-0.0.1b3.zip
+weectl extension install weewx-EcowittGateway-0.0.1b4.zip
 sudo systemctl start weewx
 ```
 

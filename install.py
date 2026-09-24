@@ -37,7 +37,7 @@ import weewx
 
 from weecfg.extension import ExtensionInstaller
 
-VERSION = '0.0.1b3'
+VERSION = '0.0.1b4'
 MODULE = 'weewx-EcowittGateway'
 SECTION = 'EcowittGateway'
 LEGACY_SECTION = 'EcowittHttp'
@@ -86,7 +86,8 @@ DRIVER_CONFIG = f"""
     # max wait for device to respond to a HTTP request (seconds)
     url_timeout = 10
 
-    # which gauge feeds the WeeWX 'rain' and 'rainRate' fields: tipping or piezo
+    # rain gauges to use: both (tipping in rain/rainRate, piezo in p_rain/hail),
+    # tipping or piezo (that gauge feeds the WeeWX rain/rainRate fields)
     rain_source = tipping
 
     # whether to show battery state data for sensors with no signal
@@ -256,17 +257,21 @@ class EcowittGatewayInstaller(ExtensionInstaller):
             out('    No gateway IP address given, so the station driver is not being changed.')
             mode = 'skip'
 
-        rain_source = existing.get('rain_source', 'tipping')
+        both = {'tipping', 'piezo'}
+        rain_source = existing.get('rain_source', 'both' if gauges == both else 'tipping')
         if mode == 'driver':
             if gauges:
                 out(f"    Paired rain gauges: {' and '.join(sorted(gauges))}")
             if gauges == {'piezo'}:
                 rain_source = 'piezo'
-            elif gauges != {'tipping'}:
-                rain_source = self._ask("Which gauge should feed WeeWX 'rain' and 'rainRate'",
-                                        rain_source, ['tipping', 'piezo'])
-            else:
+            elif gauges == {'tipping'}:
                 rain_source = 'tipping'
+            else:
+                out("    both    = record both gauges: tipping in 'rain'/'rainRate', "
+                    "piezo in 'p_rain'/'hail'/'p_rainrate'")
+                out("    tipping = WeeWX 'rain'/'rainRate' from the tipping gauge")
+                out("    piezo   = WeeWX 'rain'/'rainRate' from the piezo gauge")
+                rain_source = self._ask('Rain gauges to use', rain_source, ['both', 'tipping', 'piezo'])
 
         catchup = existing.get('catchup', {}).get('source', 'either')
         catchup = self._ask('Fetch missed data at startup from', catchup, ['either', 'device', 'net', 'none'])

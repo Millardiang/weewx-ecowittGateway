@@ -8,6 +8,22 @@ follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 Nothing yet.
 
+## [0.0.1b4] – 24 September 2026 — fourth beta
+
+### Added
+
+- **`both` rain gauge option.** `rain_source = both` records both gauges: the tipping gauge in WeeWX
+  `rain`/`rainRate`, and the piezo gauge in `p_rain`, `hail` and `p_rainrate`.
+  - The installer now offers `both`, `tipping` or `piezo`, with `both` as the default when both
+    gauge types are paired.
+  - `weectl station reconfigure` offers the same choice.
+
+### Changed
+
+- The driver logs an error and uses `tipping` if `rain_source` has an unrecognised value.
+- `weectl station reconfigure` no longer asks "Select the WeeWX observation to be used to derive
+  WeeWX observation 'rain'". The answer was never used.
+
 ## [0.0.1b3] – 24 September 2026 — third beta
 
 ### Changed
@@ -173,6 +189,7 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
 [Unreleased]: #unreleased
+[0.0.1b4]: #001b4--24-september-2026--fourth-beta
 [0.0.1b3]: #001b3--24-september-2026--third-beta
 [0.0.1b2]: #001b2--24-september-2026--second-beta
 [0.0.1b1]: #001b1--24-september-2026--first-beta

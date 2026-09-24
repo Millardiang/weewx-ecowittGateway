@@ -9,7 +9,8 @@ Copyright (C) 2026 Ian Millard
 
 Derived from ecowitt_http.py, which carries the following notices:
     Copyright (C) 2024-25 Gary Roderick                 gjroderick<at>gmail.com
- 
+    Copyright (C) 2025-26 Werner Krenn
+
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
 Foundation, either version 3 of the License, or (at your option) any later
@@ -22,7 +23,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 0.0.1 beta 5
+Version: 0.0.1 beta 6
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -82,7 +83,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '0.0.1b5'
+DRIVER_VERSION = '0.0.1b6'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -705,26 +706,59 @@ def calc_twb(temp_c, humidity):
             - 4.686035)
 
 
+UNIT_SYSTEMS = {'us': weewx.US, 'metric': weewx.METRIC, 'metricwx': weewx.METRICWX}
+
+
+def check_units(units, label):
+    units = str(units).lower()
+    if units not in ('native', *UNIT_SYSTEMS):
+        log.error("%s: unknown units '%s', using 'native'", label, units)
+        return 'native'
+    return units
+
+
+def export_packet(packet, units):
+    """Copy of a loop packet in the requested unit system, with non-finite floats as None."""
+    data = packet
+    if units != 'native':
+        data = weewx.units.StdUnitConverters[UNIT_SYSTEMS[units]].convertDict(packet)
+        data['usUnits'] = UNIT_SYSTEMS[units]
+    return {k: (None if isinstance(v, float) and not math.isfinite(v) else v) for k, v in data.items()}
+
+
+class OnceLogger:
+    """Logs a repeating error once, and logs when it clears."""
+
+    def __init__(self, label):
+        self.label, self.last = label, None
+
+    def error(self, msg):
+        if msg != self.last:
+            log.error('%s: %s', self.label, msg)
+            self.last = msg
+
+    def ok(self, msg):
+        if self.last is not None:
+            log.info('%s: %s', self.label, msg)
+            self.last = None
+
+
 class LoopJsonWriter:
     """Writes each loop packet to a JSON file (ecwLoop.json by default) for web pages and scripts."""
 
     default_name = 'ecwLoop.json'
-    unit_systems = {'us': weewx.US, 'metric': weewx.METRIC, 'metricwx': weewx.METRICWX}
 
     def __init__(self, config, html_dir=None):
         config = config or {}
         self.enabled = weeutil.weeutil.tobool(config.get('enable', False))
-        self.units = str(config.get('units', 'native')).lower()
-        if self.units not in ('native', *self.unit_systems):
-            log.error("loop_json: unknown units '%s', using 'native'", self.units)
-            self.units = 'native'
+        self.units = check_units(config.get('units', 'native'), 'loop_json')
         path = os.path.expanduser(str(config.get('path', self.default_name)))
         if not os.path.isabs(path):
             path = os.path.join(html_dir or os.getcwd(), path)
         if path.endswith(os.sep) or os.path.isdir(path):
             path = os.path.join(path, self.default_name)
         self.path = path
-        self.last_error = None
+        self.errors = OnceLogger('loop_json')
         if self.enabled:
             log.info('     loop data will be written to %s (%s units)', self.path, self.units)
 
@@ -732,23 +766,118 @@ class LoopJsonWriter:
         if not self.enabled:
             return
         try:
-            data = packet
-            if self.units != 'native':
-                data = weewx.units.StdUnitConverters[self.unit_systems[self.units]].convertDict(packet)
-                data['usUnits'] = self.unit_systems[self.units]
-            data = {k: (None if isinstance(v, float) and not math.isfinite(v) else v) for k, v in data.items()}
             tmp_path = f'{self.path}.tmp'
             with open(tmp_path, 'w') as f:
-                json.dump(data, f, default=str, sort_keys=True)
+                json.dump(export_packet(packet, self.units), f, default=str, sort_keys=True)
             os.replace(tmp_path, self.path)
         except (OSError, TypeError, ValueError, KeyError) as e:
-            if str(e) != self.last_error:
-                log.error('loop_json: unable to write %s: %s', self.path, e)
-                self.last_error = str(e)
+            self.errors.error(f'unable to write {self.path}: {e}')
         else:
-            if self.last_error is not None:
-                log.info('loop_json: writing to %s again', self.path)
-                self.last_error = None
+            self.errors.ok(f'writing to {self.path} again')
+
+
+class MqttPublisher:
+    """Publishes each loop packet to an MQTT broker (needs the paho-mqtt package)."""
+
+    formats = ('json', 'individual', 'both')
+
+    def __init__(self, config):
+        config = config or {}
+        self.enabled = weeutil.weeutil.tobool(config.get('enable', False))
+        self.client = None
+        if not self.enabled:
+            return
+        try:
+            import paho.mqtt.client as mqtt
+        except ImportError:
+            log.error("mqtt: the paho-mqtt package is not installed, MQTT publishing is disabled. Install it with "
+                      "'sudo apt install python3-paho-mqtt' (Debian) or 'pip install paho-mqtt' (pip install)")
+            self.enabled = False
+            return
+        to_int, to_bool = weeutil.weeutil.to_int, weeutil.weeutil.tobool
+        self.mqtt = mqtt
+        self.host = config.get('host', 'localhost')
+        tls = to_bool(config.get('tls', False))
+        self.port = to_int(config.get('port', 8883 if tls else 1883))
+        self.topic = str(config.get('topic', 'weewx/ecowitt')).rstrip('/')
+        self.format = str(config.get('format', 'json')).lower()
+        if self.format not in self.formats:
+            log.error("mqtt: unknown format '%s', using 'json'", self.format)
+            self.format = 'json'
+        self.units = check_units(config.get('units', 'native'), 'mqtt')
+        self.qos = min(max(to_int(config.get('qos', 0)), 0), 2)
+        self.retain = to_bool(config.get('retain', False))
+        self.errors = OnceLogger('mqtt')
+        client_id = config.get('client_id') or f'weewx-ecowittgateway-{os.getpid()}'
+        if hasattr(mqtt, 'CallbackAPIVersion'):                 # paho-mqtt 2.x
+            self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
+        else:                                                    # paho-mqtt 1.x
+            self.client = mqtt.Client(client_id=client_id)
+        if config.get('username'):
+            self.client.username_pw_set(config['username'], config.get('password') or None)
+        if tls:
+            self.client.tls_set(ca_certs=config.get('ca_certs') or None, certfile=config.get('certfile') or None,
+                                keyfile=config.get('keyfile') or None)
+            self.client.tls_insecure_set(to_bool(config.get('tls_insecure', False)))
+        self.client.will_set(f'{self.topic}/status', 'offline', qos=1, retain=True)
+        self.client.on_connect = self._on_connect
+        self.client.on_disconnect = self._on_disconnect
+        self.client.reconnect_delay_set(1, 60)
+        self.client.connect_async(self.host, self.port, to_int(config.get('keepalive', 60)))
+        self.client.loop_start()
+        log.info("     loop data will be published to MQTT broker %s:%s, topic '%s' (%s, %s units)",
+                 self.host, self.port, self.topic, self.format, self.units)
+
+    @staticmethod
+    def _failed(rc):
+        """True if a paho 1.x (int) or 2.x (ReasonCode) result code is a failure."""
+        return rc.is_failure if hasattr(rc, 'is_failure') else rc != 0
+
+    def _on_connect(self, client, userdata, flags, rc, properties=None):
+        if self._failed(rc):
+            self.errors.error(f'connection to {self.host}:{self.port} refused: {rc}')
+            return
+        log.info('mqtt: connected to %s:%s', self.host, self.port)
+        self.errors.last = None
+        client.publish(f'{self.topic}/status', 'online', qos=1, retain=True)
+
+    def _on_disconnect(self, client, userdata, *args):
+        # paho 1.x: (rc); paho 2.x: (flags, rc, properties)
+        rc = args[1] if len(args) >= 2 else (args[0] if args else 0)
+        if self._failed(rc):
+            self.errors.error(f'disconnected from {self.host}:{self.port} ({rc}), reconnecting')
+
+    def publish(self, packet):
+        if not self.enabled:
+            return
+        try:
+            data = export_packet(packet, self.units)
+            messages = []
+            if self.format in ('json', 'both'):
+                messages.append((f'{self.topic}/loop', json.dumps(data, default=str, sort_keys=True)))
+            if self.format in ('individual', 'both'):
+                messages += [(f'{self.topic}/{k}', '' if v is None else str(v)) for k, v in data.items()]
+            for topic, payload in messages:
+                result = self.client.publish(topic, payload, qos=self.qos, retain=self.retain)
+                if result.rc != self.mqtt.MQTT_ERR_SUCCESS:
+                    self.errors.error(f'not published to {self.host}:{self.port}: '
+                                      f'{self.mqtt.error_string(result.rc)}')
+                    return
+        except (ValueError, TypeError, KeyError) as e:
+            self.errors.error(f'unable to publish: {e}')
+        else:
+            self.errors.ok(f'publishing to {self.host}:{self.port} again')
+
+    def close(self):
+        if self.client is not None:
+            try:
+                self.client.publish(f'{self.topic}/status', 'offline', qos=1, retain=True)
+                self.client.disconnect()
+                self.client.loop_stop()
+            except Exception as e:
+                log.debug('mqtt: error while closing: %s', e)
+            self.client = None
+            self.enabled = False
 
 
 class EcowittCommon:
@@ -788,6 +917,7 @@ class EcowittCommon:
             debug=dbg)
         self.rain, self.piezo, self.lightning = self._trackers()
         self.loop_json = LoopJsonWriter(ec_config.get('loop_json', {}), html_dir)
+        self.mqtt = MqttPublisher(ec_config.get('mqtt', {}))
 
     def _trackers(self, prefix=''):
         return (DeltaTracker('rain', ('rain.0x13.val', 'rain.0x12.val'), self.driver_debug, prefix),
@@ -797,6 +927,11 @@ class EcowittCommon:
     @property
     def model(self):
         return self.collector.device.model
+
+    def export(self, packet):
+        """Send a finished loop packet to the optional JSON file and MQTT broker."""
+        self.loop_json.write(packet)
+        self.mqtt.publish(packet)
 
     def log_subset(self, data, label=None):
         """Log the rain and/or wind fields in data as per debug settings."""
@@ -905,7 +1040,7 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
             mapped['usUnits'] = self.unit_system
             self.log_data(f'EcowittHttpService: newLoop Mapped {self.model} data', mapped)
             self.augment_packet(packet, mapped)
-            self.loop_json.write(packet)
+            self.export(packet)
             self.log_data('EcowittHttpService: newLoop Augmented packet', packet, dbg.loop or weewx.debug >= 2)
 
     def process_queued_sensor_data(self, sensor_data, date_time):
@@ -939,6 +1074,7 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
 
     def shutDown(self):
         self.collector.shutdown()
+        self.mqtt.close()
 
 
 def loader(config_dict, engine):
@@ -998,7 +1134,7 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
                 packet.update(mapped)
                 self.use_piezo_rate(data, packet)
                 self.log_data('EcowittHttpDriver: Loop Packet', packet, self.driver_debug.loop or weewx.debug >= 2)
-                self.loop_json.write(packet)
+                self.export(packet)
                 yield packet
             elif isinstance(data, BaseException):
                 if isinstance(data, DeviceIOError):
@@ -1091,6 +1227,7 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
 
     def closePort(self):
         self.collector.shutdown()
+        self.mqtt.close()
 
 
 # ---------------------------------------------------------------------------

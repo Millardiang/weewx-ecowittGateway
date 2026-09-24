@@ -9,7 +9,7 @@ Copyright (C) 2026 Ian Millard
 
 Derived from ecowitt_http.py, which carries the following notices:
     Copyright (C) 2024-25 Gary Roderick                 gjroderick<at>gmail.com
-
+ 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
 Foundation, either version 3 of the License, or (at your option) any later
@@ -22,7 +22,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 0.0.1 beta 4
+Version: 0.0.1 beta 5
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -45,6 +45,7 @@ import io
 import json
 import logging
 import math
+import os
 import queue
 import re
 import socket
@@ -81,7 +82,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '0.0.1b4'
+DRIVER_VERSION = '0.0.1b5'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -95,6 +96,15 @@ def _version_tuple(version):
 if _version_tuple(weewx.__version__) < MIN_WEEWX_VERSION:
     raise weewx.UnsupportedFeature(f"WeeWX {'.'.join(map(str, MIN_WEEWX_VERSION))} or later is required, "
                                    f"found {weewx.__version__}")
+
+
+def html_root(config_dict):
+    """Absolute path of the WeeWX web pages folder (HTML_ROOT), or None if unknown."""
+    try:
+        root = config_dict['WEEWX_ROOT']
+    except (KeyError, TypeError):
+        return None
+    return os.path.abspath(os.path.join(root, config_dict.get('StdReport', {}).get('HTML_ROOT', 'public_html')))
 
 
 def driver_config(config_dict):
@@ -695,10 +705,56 @@ def calc_twb(temp_c, humidity):
             - 4.686035)
 
 
+class LoopJsonWriter:
+    """Writes each loop packet to a JSON file (ecwLoop.json by default) for web pages and scripts."""
+
+    default_name = 'ecwLoop.json'
+    unit_systems = {'us': weewx.US, 'metric': weewx.METRIC, 'metricwx': weewx.METRICWX}
+
+    def __init__(self, config, html_dir=None):
+        config = config or {}
+        self.enabled = weeutil.weeutil.tobool(config.get('enable', False))
+        self.units = str(config.get('units', 'native')).lower()
+        if self.units not in ('native', *self.unit_systems):
+            log.error("loop_json: unknown units '%s', using 'native'", self.units)
+            self.units = 'native'
+        path = os.path.expanduser(str(config.get('path', self.default_name)))
+        if not os.path.isabs(path):
+            path = os.path.join(html_dir or os.getcwd(), path)
+        if path.endswith(os.sep) or os.path.isdir(path):
+            path = os.path.join(path, self.default_name)
+        self.path = path
+        self.last_error = None
+        if self.enabled:
+            log.info('     loop data will be written to %s (%s units)', self.path, self.units)
+
+    def write(self, packet):
+        if not self.enabled:
+            return
+        try:
+            data = packet
+            if self.units != 'native':
+                data = weewx.units.StdUnitConverters[self.unit_systems[self.units]].convertDict(packet)
+                data['usUnits'] = self.unit_systems[self.units]
+            data = {k: (None if isinstance(v, float) and not math.isfinite(v) else v) for k, v in data.items()}
+            tmp_path = f'{self.path}.tmp'
+            with open(tmp_path, 'w') as f:
+                json.dump(data, f, default=str, sort_keys=True)
+            os.replace(tmp_path, self.path)
+        except (OSError, TypeError, ValueError, KeyError) as e:
+            if str(e) != self.last_error:
+                log.error('loop_json: unable to write %s: %s', self.path, e)
+                self.last_error = str(e)
+        else:
+            if self.last_error is not None:
+                log.info('loop_json: writing to %s again', self.path)
+                self.last_error = None
+
+
 class EcowittCommon:
     """Functionality shared by the driver and the service."""
 
-    def __init__(self, unit_system=None, **ec_config):
+    def __init__(self, unit_system=None, html_dir=None, **ec_config):
         self.driver_debug = dbg = DebugOptions(**ec_config)
         self.mapper = HttpMapper(driver_debug=dbg, **ec_config)
         to_int, to_bool = weeutil.weeutil.to_int, weeutil.weeutil.tobool
@@ -731,6 +787,7 @@ class EcowittCommon:
             fw_update_check_interval=int(ec_config.get('firmware_update_check_interval', DEFAULT_FW_CHECK_INTERVAL)),
             debug=dbg)
         self.rain, self.piezo, self.lightning = self._trackers()
+        self.loop_json = LoopJsonWriter(ec_config.get('loop_json', {}), html_dir)
 
     def _trackers(self, prefix=''):
         return (DeltaTracker('rain', ('rain.0x13.val', 'rain.0x12.val'), self.driver_debug, prefix),
@@ -794,7 +851,8 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
         log.info('EcowittHttpService: version is %s', DRIVER_VERSION)
         self.unit_system = DEFAULT_UNIT_SYSTEM
         try:
-            EcowittCommon.__init__(self, unit_system=self.unit_system, **svc_config)
+            EcowittCommon.__init__(self, unit_system=self.unit_system, html_dir=html_root(config_dict),
+                                   **svc_config)
         except weewx.ViolatedPrecondition as e:
             raise ServiceInitializationError from e
         weewx.engine.StdService.__init__(self, engine, config_dict)
@@ -847,6 +905,7 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
             mapped['usUnits'] = self.unit_system
             self.log_data(f'EcowittHttpService: newLoop Mapped {self.model} data', mapped)
             self.augment_packet(packet, mapped)
+            self.loop_json.write(packet)
             self.log_data('EcowittHttpService: newLoop Augmented packet', packet, dbg.loop or weewx.debug >= 2)
 
     def process_queued_sensor_data(self, sensor_data, date_time):
@@ -883,7 +942,7 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
 
 
 def loader(config_dict, engine):
-    return EcowittHttpDriver(**driver_config(config_dict))
+    return EcowittHttpDriver(html_dir=html_root(config_dict), **driver_config(config_dict))
 
 
 def configurator_loader(config_dict):
@@ -897,12 +956,12 @@ def confeditor_loader():
 class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
     """WeeWX driver for Ecowitt devices using the local HTTP API."""
 
-    def __init__(self, **stn_dict):
+    def __init__(self, html_dir=None, **stn_dict):
         log.info('EcowittHttpDriver: version is %s', DRIVER_VERSION)
         self.unit_system = DEFAULT_UNIT_SYSTEM
         log.info('unit_system: %s', self.unit_system)
         try:
-            EcowittCommon.__init__(self, unit_system=self.unit_system, **stn_dict)
+            EcowittCommon.__init__(self, unit_system=self.unit_system, html_dir=html_dir, **stn_dict)
         except weewx.ViolatedPrecondition as e:
             raise weewx.engine.InitializationError from e
         catchup = stn_dict.get('catchup', {})
@@ -939,6 +998,7 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
                 packet.update(mapped)
                 self.use_piezo_rate(data, packet)
                 self.log_data('EcowittHttpDriver: Loop Packet', packet, self.driver_debug.loop or weewx.debug >= 2)
+                self.loop_json.write(packet)
                 yield packet
             elif isinstance(data, BaseException):
                 if isinstance(data, DeviceIOError):
@@ -1296,7 +1356,8 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
             print(f"debug level is '{weewx.debug:d}'")
         weeutil.logger.setup('weewx', config_dict)
         define_units()
-        DirectEcowittDevice(options, parser, driver_config(config_dict)).process_options()
+        DirectEcowittDevice(options, parser, driver_config(config_dict),
+                            html_dir=html_root(config_dict)).process_options()
 
 
 # ---------------------------------------------------------------------------
@@ -2745,6 +2806,7 @@ class DirectEcowittDevice:
         self.stn_dict = stn_dict
         self.unit_system = DEFAULT_UNIT_SYSTEM
         self.discovery_period = kwargs.get('discovery_period', DEFAULT_DISCOVERY_PERIOD)
+        self.html_dir = kwargs.get('html_dir')
         self.ip_address = self.ip_from_config_opts()
         self.show_battery, source = self.bool_from_config('show_battery', DEFAULT_FILTER_BATTERY)
         sources = {'default': 'using the default', 'station': 'obtained from station config',
@@ -3343,7 +3405,7 @@ class DirectEcowittDevice:
                 self.stn_dict[key] = self.opt(opt)
         driver = None
         try:
-            driver = EcowittHttpDriver(**self.stn_dict)
+            driver = EcowittHttpDriver(html_dir=self.html_dir, **self.stn_dict)
             device = driver.collector.device
             print()
             print(f'Interrogating {BOLD}{device.model}{ENDC} at {BOLD}{device.ip_address}{ENDC}')
@@ -3504,7 +3566,8 @@ def main():
         print(f'debug level is {weewx.debug:d}')
     weeutil.logger.setup('ecowitt_http', config_dict)
     define_units()
-    DirectEcowittDevice(namespace, parser, driver_config(config_dict)).process_options()
+    DirectEcowittDevice(namespace, parser, driver_config(config_dict),
+                        html_dir=html_root(config_dict)).process_options()
 
 
 if __name__ == '__main__':

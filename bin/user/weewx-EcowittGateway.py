@@ -7,9 +7,9 @@ HTTP API, or the binary TCP API for the GW1000/WH2650 (which have no HTTP API).
 
 Copyright (C) 2026 Ian Millard
 
-Derived from the original ecowitt_http.py, which carries the following notice:
+Derived from the original GW1000 and ecowitt_local_http.py drivers, which both carry the following notice:
     Copyright (C) 2024-25 Gary Roderick                 gjroderick<at>gmail.com
-    
+
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
 Foundation, either version 3 of the License, or (at your option) any later
@@ -22,7 +22,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 0.0.1 beta 8
+Version: 1.0.0
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -83,7 +83,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '0.0.1b8'
+DRIVER_VERSION = '1.0.0'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 

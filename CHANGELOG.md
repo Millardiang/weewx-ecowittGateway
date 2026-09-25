@@ -8,6 +8,18 @@ follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 Nothing yet.
 
+## [1.0.0] – 25 September 2026 — first full release
+
+First full release of weewx-EcowittGateway, a WeeWX 5.4+ driver and service for Ecowitt gateways
+and consoles, using the local HTTP API, or the TCP API for the GW1000/WH2650. It can be considered a
+natural evolution of both the GW1000 driver and the `ecowitt_local_http` driver.
+
+### Changed
+
+- The version is now 1.0.0. The code is otherwise identical to 0.0.1b8.
+- From this release the configuration options and WeeWX field names are frozen; breaking changes
+  will need a new MAJOR version (see [VERSIONING.md](VERSIONING.md)).
+
 ## [0.0.1b8] – 24 September 2026 — eighth beta
 
 ### Added
@@ -283,6 +295,7 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
 [Unreleased]: #unreleased
+[1.0.0]: #100--25-september-2026--first-full-release
 [0.0.1b8]: #001b8--24-september-2026--eighth-beta
 [0.0.1b7]: #001b7--24-september-2026--seventh-beta
 [0.0.1b6]: #001b6--24-september-2026--sixth-beta

@@ -4,9 +4,13 @@ A [WeeWX](https://weewx.com) driver and service for Ecowitt gateways and console
 **local HTTP API**. There's no cloud dependency for live data, and the gateway doesn't need any
 custom-server or upload configuration.
 
-**Version:** 0.0.1 beta 8 (`0.0.1b8`) · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
+**Version:** 1.0.0 · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
 
-This is a compact rewrite of `ecowitt_http.py`. It keeps the same
+This driver should be considered a natural evolution of both the GW1000 driver and the
+`ecowitt_local_http` driver: it brings the GW1000/WH2650 (TCP API) and the newer HTTP API gateways
+and consoles together in a single driver.
+
+It is a compact rewrite of `ecowitt_http.py`. It keeps the same
 configuration, field names and command-line tools, fixes a number of bugs and is about 75% smaller.
 See [CHANGELOG.md](CHANGELOG.md).
 
@@ -95,7 +99,7 @@ WeeWX 5.4.0 or later.
 In short:
 
 ```bash
-weectl extension install weewx-EcowittGateway-0.0.1b8.zip
+weectl extension install weewx-EcowittGateway-1.0.0.zip
 sudo systemctl restart weewx
 ```
 
@@ -597,9 +601,11 @@ Logs:
 
 See **[VERSIONING.md](VERSIONING.md)**. In brief:
 
-- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (`0.0.1b8`);
-- the current release is the eighth beta;
-- configuration compatibility with `ecowitt_http.py` is kept throughout 0.x.
+- releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (e.g. `1.1.0b1`);
+- the current release is 1.0.0, the first full release, following the 0.0.1 betas;
+- from 1.0.0 the configuration options and WeeWX field names are frozen: a breaking change needs a
+  new MAJOR version;
+- configuration compatibility with `ecowitt_http.py` is kept throughout 1.x.
 
 ---
 

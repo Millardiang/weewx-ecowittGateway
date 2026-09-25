@@ -115,7 +115,7 @@ Publish each loop packet to an MQTT broker? (y/n) [n]: y
 The `[EcowittGateway]` section is written directly after `[Station]`. When re-run, for example for an
 upgrade, the installer offers your current settings as the defaults.
 
-Upgrading from 0.0.1b1/b2 or switching from `ecowitt_http.py`: settings in an `[EcowittHttp]` section
+Upgrading from the 0.0.1b1/b2 betas or switching from `ecowitt_http.py`: settings in an `[EcowittHttp]` section
 are moved to `[EcowittGateway]`, and `station_type = EcowittHttp` becomes `station_type = EcowittGateway`.
 
 If the installer is run without a terminal (for example from a script), it doesn't ask anything.
@@ -136,7 +136,7 @@ It saves the default settings with `ip_address = replace_me` and doesn't change 
 
 ```bash
 # 1. Install the extension and answer the prompts
-sudo weectl extension install weewx-EcowittGateway-0.0.1b8.zip
+sudo weectl extension install weewx-EcowittGateway-1.0.0.zip
 
 # 2. Check it can talk to the gateway
 sudo weectl device --live-data
@@ -149,7 +149,7 @@ sudo journalctl -u weewx -f
 When it's working, the log shows lines like:
 
 ```
-EcowittHttpDriver: version is 0.0.1b8
+EcowittHttpDriver: version is 1.0.0
      device IP address is 192.168.1.100
 EcowittHttpCollector startup
 Using 'rain.0x13.val' for rain total
@@ -161,7 +161,7 @@ Using 'rain.0x13.val' for rain total
 sudo systemctl stop weewx
 sudo weectl extension list                       # note the old extension's name
 sudo weectl extension uninstall <old-name>       # or delete /etc/weewx/bin/user/ecowitt_http.py
-sudo weectl extension install weewx-EcowittGateway-0.0.1b8.zip
+sudo weectl extension install weewx-EcowittGateway-1.0.0.zip
 sudo systemctl start weewx
 ```
 
@@ -222,7 +222,7 @@ source ~/weewx-venv/bin/activate
 source ~/weewx-venv/bin/activate
 
 # 1. Install the extension and answer the prompts
-weectl extension install weewx-EcowittGateway-0.0.1b8.zip
+weectl extension install weewx-EcowittGateway-1.0.0.zip
 
 # 2. Check it can talk to the gateway
 weectl device --live-data
@@ -244,7 +244,7 @@ source ~/weewx-venv/bin/activate
 sudo systemctl stop weewx                        # or stop weewxd
 weectl extension list
 weectl extension uninstall <old-name>            # or delete ~/weewx-data/bin/user/ecowitt_http.py
-weectl extension install weewx-EcowittGateway-0.0.1b8.zip
+weectl extension install weewx-EcowittGateway-1.0.0.zip
 sudo systemctl start weewx
 ```
 

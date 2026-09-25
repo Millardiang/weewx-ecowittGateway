@@ -41,7 +41,7 @@ import weewx
 
 from weecfg.extension import ExtensionInstaller
 
-VERSION = '0.0.1b8'
+VERSION = '1.0.0'
 MODULE = 'weewx-EcowittGateway'
 SECTION = 'EcowittGateway'
 LEGACY_SECTION = 'EcowittHttp'

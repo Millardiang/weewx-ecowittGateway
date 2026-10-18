@@ -22,7 +22,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 1.0.0
+Version: 1.0.1
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -83,7 +83,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '1.0.0'
+DRIVER_VERSION = '1.0.1'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -2454,7 +2454,7 @@ class EcowittHttpParser:
                 ('winddir_offset', 'windDirOffset', 'group_direction', 'degree_compass')):
             if src in response:
                 vt = _to_vt(response[src], None, group)
-                parsed[dest] = vt if vt is _BLANK else vt._replace(unit=unit or device_units[group])
+                parsed[dest] = vt if vt is _BLANK else weewx.units.ValueTuple(vt.value, unit or device_units[group], vt.group)
         _copy(parsed, response, _same(weeutil.weeutil.to_bool, 'th_cli', 'wh34_cli', 'pm25_cli', 'soil_cli'))
         return parsed
 

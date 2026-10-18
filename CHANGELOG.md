@@ -4,9 +4,17 @@ All notable changes to weewx-EcowittGateway are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and version numbers
 follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
-## [Unreleased]
 
-Nothing yet.
+## [1.0.1] – 18 October 2026 — bug fix
+
+### Fixed
+
+- `weectl device --get-calibration` crashed with `AttributeError: 'ValueTuple' object has no
+  attribute '_replace'`. WeeWX's `ValueTuple` is a plain `tuple` subclass, not a `namedtuple`, so
+  the calibration parser now builds a new `ValueTuple` with the device unit instead of calling
+  `_replace()`. This was the only such call in the driver. Reported by N1OTX on a GW3000B
+  (firmware V1.2.4) with WeeWX 5.5.0 and Python 3.13
+  ([#1](https://github.com/Millardiang/weewx-ecowittGateway/issues/1)).
 
 ## [1.0.0] – 25 September 2026 — first full release
 
@@ -295,6 +303,7 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
 [Unreleased]: #unreleased
+[1.0.1]: #101--18-october-2026--bug-fix
 [1.0.0]: #100--25-september-2026--first-full-release
 [0.0.1b8]: #001b8--24-september-2026--eighth-beta
 [0.0.1b7]: #001b7--24-september-2026--seventh-beta

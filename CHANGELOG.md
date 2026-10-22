@@ -5,6 +5,47 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 
+## [1.1.0] – 22 October 2026
+
+### Added
+
+- New field `ws68_batt`: the battery voltage of a WS68 wind and solar array.
+- When a WS68 is paired, the driver adds a `ws68_batt` column (and its daily summary) to the
+  archive database the first time it sees the WS68, if the column isn't there already. It is
+  recorded from the next archive record with no restart, and a single line is logged. Nothing is
+  added for stations without a WS68, or when the driver is run from `weectl device`.
+
+### Fixed
+
+- With a WS68 paired to an HTTP gateway (for example a GW3000B), the WS68's battery voltage was
+  reported as `ws80_batt`, so one battery appeared under both the WS68 and the WS80 and could raise
+  two low-battery alarms. The gateway reports the wind array's voltage with the wind direction
+  (`common_list.0x0A.voltage`) whichever array is fitted. The driver now uses the paired sensor IDs:
+  when a WS68 is paired and a WS80 is not, the voltage goes to `ws68_batt` and `ws80_batt` stays
+  empty. This applies to live data, service mode and catchup records. Setups with a WS80, with both
+  arrays paired or with neither are unchanged. `wh68_batt` is still the WS68's battery state.
+- On a GW1000/WH2650 (TCP API) with a WS68, `ws68_batt` is now filled from the battery voltage
+  the TCP API already reported.
+
+### Upgrading
+
+- If you have a WS68 and record or alert on `ws80_batt`, switch to `ws68_batt`. Your existing
+  `ws80_batt` history is left as it is. The `ws68_batt` database column is added for you; if that
+  fails (for example the database user can't alter tables), the log gives the command to add it:
+  `weectl database add-column ws68_batt --type=REAL`.
+
+## [1.0.2] – 21 October 2026 — bug fix
+
+### Fixed
+
+- WeeWX stopped, instead of waiting and retrying, if the gateway could not be reached when it
+  started (for example `DeviceIOError: Failed to obtain 'get_version' data: <urlopen error [Errno
+  113] No route to host>`, followed by `weewx.service: Failed with result 'exit-code'`). The
+  driver's `DeviceIOError` is now a subclass of `weewx.WeeWxIOError`, so weewxd logs `Caught
+  WeeWxIOError`, waits `retry_wait` seconds (default 60) and tries again until the gateway answers.
+  This applies to both driver and service mode. Running weewxd with `--exit` still stops on the
+  error, as before.
+
 ## [1.0.1] – 18 October 2026 — bug fix
 
 ### Fixed
@@ -303,6 +344,8 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
 [Unreleased]: #unreleased
+[1.1.0]: #110--22-october-2026
+[1.0.2]: #102--21-october-2026--bug-fix
 [1.0.1]: #101--18-october-2026--bug-fix
 [1.0.0]: #100--25-september-2026--first-full-release
 [0.0.1b8]: #001b8--24-september-2026--eighth-beta

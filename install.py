@@ -41,7 +41,7 @@ import weewx
 
 from weecfg.extension import ExtensionInstaller
 
-VERSION = '1.1.0'
+VERSION = '1.1.1'
 MODULE = 'weewx-EcowittGateway'
 SECTION = 'EcowittGateway'
 LEGACY_SECTION = 'EcowittHttp'
@@ -66,8 +66,8 @@ EXTRACTORS = {
              'pm10_24h_avg', 'co2_24h_avg', 'wh25_batt', 'wh26_batt', *_rng('wh31_ch{}_batt', 8),
              *_rng('wn35_ch{}_batt', 8), 'wh40_batt', 'wn20_batt', 'wn38_batt', *_rng('wh41_ch{}_batt', 4),
              'wh45_batt', *_rng('wh51_ch{}_batt', 16), *_rng('wh55_ch{}_batt', 4), 'wh57_batt', 'wh65_batt',
-             'wh68_batt', 'wh69_batt', 'ws68_batt', 'ws80_batt', 'ws85_batt', 'ws90_batt', 'ws85cap_volt',
-             'ws90cap_volt', 'ws1900batt', 'console_batt', 'consoleext_batt', *_rng('ldsbatt{}', 4)],
+             'wh68_batt', 'wh69_batt', 'ws80_batt', 'ws85_batt', 'ws90_batt', 'ws85cap_volt', 'ws90cap_volt',
+             'ws1900batt', 'console_batt', 'consoleext_batt', *_rng('ldsbatt{}', 4)],
 }
 FIRSTLAST = ('model', 'stationtype', 'apName')
 

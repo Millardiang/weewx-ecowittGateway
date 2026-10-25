@@ -5,6 +5,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 
+## [1.1.1] – 25 October 2026
+
+### Removed
+
+- The `ws68_batt` field added in 1.1.0, and the automatic creation of its database column. It
+  isn't needed: the WS68's battery state is already reported in `wh68_batt`.
+
+### Unchanged
+
+- The 1.1.0 fix stays: with a WS68 paired and no WS80, the WS68's battery voltage is still kept out
+  of `ws80_batt`, so one battery doesn't appear under two sensors or raise two low-battery alarms.
+
+### Upgrading
+
+- If 1.1.0 added a `ws68_batt` column to your database, it does no harm and is no longer written
+  to. To remove it: `weectl database drop-columns ws68_batt`.
+
 ## [1.1.0] – 22 October 2026
 
 ### Added
@@ -344,6 +361,7 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
 [Unreleased]: #unreleased
+[1.1.1]: #111--25-october-2026
 [1.1.0]: #110--22-october-2026
 [1.0.2]: #102--21-october-2026--bug-fix
 [1.0.1]: #101--18-october-2026--bug-fix

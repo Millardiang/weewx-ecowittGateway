@@ -22,7 +22,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 1.1.0
+Version: 1.1.1
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -83,7 +83,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '1.1.0'
+DRIVER_VERSION = '1.1.1'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -183,8 +183,8 @@ _OBS_GROUPS = {
     'group_rain': ['eventRain', 'hourRain', 'rain24', 'weekRain', 'totalRain', 'erain_piezo', 'hrain_piezo',
                    'drain_piezo', 'wrain_piezo', 'mrain_piezo', 'yrain_piezo', 'rain_piezo', 'rain24_piezo',
                    'train_piezo', 't_rain', 'p_rain', 't_rainyear', 'p_rainyear'],
-    'group_volt': ['rainBatteryStatus', 'hailBatteryStatus', 'windBatteryStatus', 'ws68_batt', 'ws80_batt',
-                   'ws85_batt', 'ws90_batt', 'wqt01batt', 'wn64batt', 'ws1900batt', 'console_batt', 'consoleext_batt',
+    'group_volt': ['rainBatteryStatus', 'hailBatteryStatus', 'windBatteryStatus', 'ws80_batt', 'ws85_batt',
+                   'ws90_batt', 'wqt01batt', 'wn64batt', 'ws1900batt', 'console_batt', 'consoleext_batt',
                    'ws90cap_volt', 'ws85cap_volt'] + _rng('ldsbatt{}', 4),
     'group_speed2': ['maxdailygust'],
     'group_distance': ['lightning_dist', 'lightning_distance'],
@@ -319,35 +319,10 @@ def wind_array(sensor_data):
 
 
 def route_wind_voltage(data, array):
-    """Move the 0x0A wind array voltage to 'wh68.voltage' when the array is a WS68, so that it maps to
-    ws68_batt rather than ws80_batt."""
+    """Move the 0x0A wind array voltage to 'wh68.voltage' when the array is a WS68, so that it is not
+    reported as ws80_batt. The WS68 battery state is reported in wh68_batt."""
     if array == 'wh68' and 'common_list.0x0A.voltage' in data:
         data.setdefault('wh68.voltage', data.pop('common_list.0x0A.voltage'))
-
-
-def add_archive_column(engine, binding, column, column_type='REAL'):
-    """Add column to the archive database WeeWX has open for archiving, if it is missing.
-
-    Works only on the database manager the StdArchive service already has open, so nothing is touched
-    when no archive service is running (for example under 'weectl device'). The manager's cached
-    column lists are refreshed, so the new column is saved from the next archive record without a
-    restart. Returns True if the column was added.
-    """
-    db_binder = getattr(engine, 'db_binder', None)
-    manager = getattr(db_binder, 'manager_cache', {}).get(binding)
-    if manager is None or column in (manager.sqlkeys or ()):
-        return False
-    try:
-        manager.add_column(column, column_type)
-        manager.sqlkeys = manager.connection.columnsOf(manager.table_name)
-        if getattr(manager, 'daykeys', None) is not None:
-            manager.daykeys.add(column)
-    except Exception as e:
-        log.error("Could not add column '%s' to database '%s': %s", column, manager.database_name, e)
-        log.error("    add it with: weectl database add-column %s --type=%s", column, column_type)
-        return False
-    log.info("Added column '%s' to database '%s'", column, manager.database_name)
-    return True
 
 
 def _sensor_names(model, channels):
@@ -637,8 +612,7 @@ class HttpMapper(FieldMapper):
         'wh80_batt': 'ws80.battery', 'wh85_batt': 'ws85.battery', 'wh90_batt': 'ws90.battery',
         'rain_batt': 'rain.0x13.battery', 'piezorain_batt': 'piezoRain.0x13.battery',
         'ws85cap_volt': 'piezoRain.0x13.ws85cap_volt', 'ws90cap_volt': 'piezoRain.0x13.ws90cap_volt',
-        'ws68_batt': 'wh68.voltage', 'ws80_batt': 'common_list.0x0A.voltage', 'ws85_batt': 'ws85.voltage',
-        'ws90_batt': 'ws90.voltage',
+        'ws80_batt': 'common_list.0x0A.voltage', 'ws85_batt': 'ws85.voltage', 'ws90_batt': 'ws90.voltage',
         'rainBatteryStatus': 'rain.0x13.voltage', 'hailBatteryStatus': 'piezoRain.0x13.voltage',
         'windBatteryStatus': 'ws80.voltage', 'consBatteryVoltage': 'console.console_batt_volt',
         'ws6210_batt': 'console.battery', 'console_batt': 'console.console_batt_volt',
@@ -1099,19 +1073,6 @@ class MqttPublisher:
 class EcowittCommon:
     """Functionality shared by the driver and the service."""
 
-    # the WeeWX engine and archive data binding, set when running under weewxd
-    archive_engine = None
-    archive_binding = 'wx_binding'
-    _ws68_column_checked = False
-
-    def ensure_ws68_column(self, array):
-        """With a WS68 as the wind array, silently add the ws68_batt column to the archive if missing."""
-        if array != 'wh68' or self._ws68_column_checked or self.archive_engine is None:
-            return
-        self._ws68_column_checked = True
-        if add_archive_column(self.archive_engine, self.archive_binding, 'ws68_batt'):
-            log.info('     ws68_batt will record the WS68 battery voltage')
-
     def __init__(self, unit_system=None, html_dir=None, **ec_config):
         self.driver_debug = dbg = DebugOptions(**ec_config)
         self.mapper = HttpMapper(driver_debug=dbg, **ec_config)
@@ -1221,8 +1182,6 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
         except weewx.ViolatedPrecondition as e:
             raise ServiceInitializationError from e
         weewx.engine.StdService.__init__(self, engine, config_dict)
-        self.archive_engine = engine
-        self.archive_binding = (config_dict.get('StdArchive') or {}).get('data_binding', 'wx_binding')
         self.max_age = int(svc_config.get('max_age', DEFAULT_MAX_AGE))
         self.lost_contact_log_period = int(svc_config.get('lost_contact_log_period',
                                                           DEFAULT_LOST_CONTACT_LOG_PERIOD))
@@ -1268,7 +1227,6 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
                     log.info('EcowittHttpService: Received collector shutdown signal')
                 self.shutDown()
         if self.latest_sensor_data is not None:
-            self.ensure_ws68_column(self.collector.wind_array)
             mapped = self.mapper.map_data(self.latest_sensor_data)
             mapped['usUnits'] = self.unit_system
             self.log_data(f'EcowittHttpService: newLoop Mapped {self.model} data', mapped)
@@ -1311,10 +1269,7 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
 
 
 def loader(config_dict, engine):
-    driver = EcowittHttpDriver(html_dir=html_root(config_dict), **driver_config(config_dict))
-    driver.archive_engine = engine
-    driver.archive_binding = (config_dict.get('StdArchive') or {}).get('data_binding', 'wx_binding')
-    return driver
+    return EcowittHttpDriver(html_dir=html_root(config_dict), **driver_config(config_dict))
 
 
 def configurator_loader(config_dict):
@@ -1371,7 +1326,6 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
                 self.use_piezo_rate(data, packet)
                 self.log_data('EcowittHttpDriver: Loop Packet', packet, self.driver_debug.loop or weewx.debug >= 2)
                 self.export(packet)
-                self.ensure_ws68_column(self.collector.wind_array)
                 yield packet
             elif isinstance(data, BaseException):
                 if isinstance(data, DeviceIOError):
@@ -1415,7 +1369,6 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
                 array = wind_array(sensors if sensors is not None else self.collector.device.get_sensors_data())
             except (DeviceIOError, InvalidApiResponseError, ParseError):
                 array = 'ws80'
-        self.ensure_ws68_column(array)
         for rec in catchup_obj.gen_history_records(start_ts=since_ts):
             if sensors is not None:
                 rec = mapper.apply(rec, sensors)
@@ -1504,8 +1457,8 @@ _EXTRACTORS = {
              *_rng('pm2_5{}_24h_avg', 5), 'pm10_24h_avg', 'co2_24h_avg', 'wh25_batt', 'wh26_batt',
              *_rng('wh31_ch{}_batt', 8), *_rng('wn35_ch{}_batt', 8), 'wh40_batt', 'wn20_batt', 'wn38_batt',
              *_rng('wh41_ch{}_batt', 4), 'wh45_batt', *_rng('wh51_ch{}_batt', 16), *_rng('wh55_ch{}_batt', 4),
-             'wh57_batt', 'wh65_batt', 'wh68_batt', 'wh69_batt', 'ws68_batt', 'ws80_batt', 'ws85_batt',
-             'ws90_batt', 'ws85cap_volt', 'ws90cap_volt', 'ws1900batt', 'console_batt', 'consoleext_batt',
+             'wh57_batt', 'wh65_batt', 'wh68_batt', 'wh69_batt', 'ws80_batt', 'ws85_batt', 'ws90_batt',
+             'ws85cap_volt', 'ws90cap_volt', 'ws1900batt', 'console_batt', 'consoleext_batt',
              *_rng('ldsbatt{}', 4)),
 }
 _FIRSTLAST = ('model', 'stationtype', 'apName')

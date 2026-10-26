@@ -99,7 +99,7 @@ WeeWX 5.4.0 or later.
 In short:
 
 ```bash
-weectl extension install weewx-EcowittGateway-1.1.1.zip
+weectl extension install https://github.com/Millardiang/weewx-ecowittGateway/archive/refs/heads/main.zip
 sudo systemctl restart weewx
 ```
 

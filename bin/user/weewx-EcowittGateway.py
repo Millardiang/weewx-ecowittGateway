@@ -22,7 +22,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 1.1.1
+Version: 1.2.0
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -83,7 +83,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '1.1.1'
+DRIVER_VERSION = '1.2.0'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -183,8 +183,8 @@ _OBS_GROUPS = {
     'group_rain': ['eventRain', 'hourRain', 'rain24', 'weekRain', 'totalRain', 'erain_piezo', 'hrain_piezo',
                    'drain_piezo', 'wrain_piezo', 'mrain_piezo', 'yrain_piezo', 'rain_piezo', 'rain24_piezo',
                    'train_piezo', 't_rain', 'p_rain', 't_rainyear', 'p_rainyear'],
-    'group_volt': ['rainBatteryStatus', 'hailBatteryStatus', 'windBatteryStatus', 'ws80_batt', 'ws85_batt',
-                   'ws90_batt', 'wqt01batt', 'wn64batt', 'ws1900batt', 'console_batt', 'consoleext_batt',
+    'group_volt': ['rainBatteryStatus', 'hailBatteryStatus', 'windBatteryStatus', 'ws68_batt', 'ws80_batt',
+                   'ws85_batt', 'ws90_batt', 'wqt01batt', 'wn64batt', 'ws1900batt', 'console_batt', 'consoleext_batt',
                    'ws90cap_volt', 'ws85cap_volt'] + _rng('ldsbatt{}', 4),
     'group_speed2': ['maxdailygust'],
     'group_distance': ['lightning_dist', 'lightning_distance'],
@@ -319,8 +319,8 @@ def wind_array(sensor_data):
 
 
 def route_wind_voltage(data, array):
-    """Move the 0x0A wind array voltage to 'wh68.voltage' when the array is a WS68, so that it is not
-    reported as ws80_batt. The WS68 battery state is reported in wh68_batt."""
+    """Move the 0x0A wind array voltage to 'wh68.voltage' when the array is a WS68, so that it is reported
+    as ws68_batt rather than ws80_batt. The WS68 battery state (a level) stays in wh68_batt."""
     if array == 'wh68' and 'common_list.0x0A.voltage' in data:
         data.setdefault('wh68.voltage', data.pop('common_list.0x0A.voltage'))
 
@@ -612,7 +612,8 @@ class HttpMapper(FieldMapper):
         'wh80_batt': 'ws80.battery', 'wh85_batt': 'ws85.battery', 'wh90_batt': 'ws90.battery',
         'rain_batt': 'rain.0x13.battery', 'piezorain_batt': 'piezoRain.0x13.battery',
         'ws85cap_volt': 'piezoRain.0x13.ws85cap_volt', 'ws90cap_volt': 'piezoRain.0x13.ws90cap_volt',
-        'ws80_batt': 'common_list.0x0A.voltage', 'ws85_batt': 'ws85.voltage', 'ws90_batt': 'ws90.voltage',
+        'ws68_batt': 'wh68.voltage', 'ws80_batt': 'common_list.0x0A.voltage', 'ws85_batt': 'ws85.voltage',
+        'ws90_batt': 'ws90.voltage',
         'rainBatteryStatus': 'rain.0x13.voltage', 'hailBatteryStatus': 'piezoRain.0x13.voltage',
         'windBatteryStatus': 'ws80.voltage', 'consBatteryVoltage': 'console.console_batt_volt',
         'ws6210_batt': 'console.battery', 'console_batt': 'console.console_batt_volt',
@@ -1457,8 +1458,8 @@ _EXTRACTORS = {
              *_rng('pm2_5{}_24h_avg', 5), 'pm10_24h_avg', 'co2_24h_avg', 'wh25_batt', 'wh26_batt',
              *_rng('wh31_ch{}_batt', 8), *_rng('wn35_ch{}_batt', 8), 'wh40_batt', 'wn20_batt', 'wn38_batt',
              *_rng('wh41_ch{}_batt', 4), 'wh45_batt', *_rng('wh51_ch{}_batt', 16), *_rng('wh55_ch{}_batt', 4),
-             'wh57_batt', 'wh65_batt', 'wh68_batt', 'wh69_batt', 'ws80_batt', 'ws85_batt', 'ws90_batt',
-             'ws85cap_volt', 'ws90cap_volt', 'ws1900batt', 'console_batt', 'consoleext_batt',
+             'wh57_batt', 'wh65_batt', 'wh68_batt', 'wh69_batt', 'ws68_batt', 'ws80_batt', 'ws85_batt',
+             'ws90_batt', 'ws85cap_volt', 'ws90cap_volt', 'ws1900batt', 'console_batt', 'consoleext_batt',
              *_rng('ldsbatt{}', 4)),
 }
 _FIRSTLAST = ('model', 'stationtype', 'apName')
@@ -2875,7 +2876,9 @@ class EcowittSensors:
     """Sensor metadata (from get_sensors_info) with battery voltages merged in."""
 
     no_low = ('ws80', 'ws85', 'ws90')
-    batt_binary = ('wh68', 'wh69', 'wh25', 'wh26', 'wn31', 'wn32')
+    # a 0/1 flag or a 0-5 level over the HTTP API (it depends on the gateway), volts over the TCP API
+    batt_flag_level_volt = ('wh68',)
+    batt_binary = ('wh69', 'wh25', 'wh26', 'wn31', 'wn32')
     batt_int = ('wn20', 'wn38', 'wh40', 'wh41', 'wh43', 'wh45', 'wh55', 'wh57')
     batt_volt = ('wh68', 'wh51', 'wh54', 'wn34', 'wn35', 'wn38', 'ws80', 'ws85', 'ws90')
     # live data voltage field: sensor address
@@ -2917,6 +2920,12 @@ class EcowittSensors:
         batt = sensor_data.get('battery')
         if model in self.no_low:
             return '--'
+        if model in self.batt_flag_level_volt:
+            if sensor_data.get('voltage') is not None:
+                return 'low' if sensor_data['voltage'] <= 1.2 else 'OK'
+            if batt is None:
+                return '--'
+            return 'OK' if batt == 0 else 'low' if batt == 1 else 'DC' if batt == 6 else 'OK' if batt <= 5 else '--'
         if model in self.batt_binary:
             return {0: 'OK', 1: 'low'}.get(batt, '--')
         if model in self.batt_int:

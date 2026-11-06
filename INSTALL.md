@@ -119,7 +119,72 @@ Upgrading from the 0.0.1b1/b2 betas or switching from `ecowitt_http.py`: setting
 are moved to `[EcowittGateway]`, and `station_type = EcowittHttp` becomes `station_type = EcowittGateway`.
 
 If the installer is run without a terminal (for example from a script), it doesn't ask anything.
-It saves the default settings with `ip_address = replace_me` and doesn't change the station driver.
+Unless you give the answers in environment variables (below), it saves the default settings with
+`ip_address = replace_me` and doesn't change the station driver.
+
+### Scripted (unattended) install
+
+Every question can be answered with an `ECOWITT_*` environment variable, so the install can run
+from Vagrant, Ansible, cloud-init or a shell script with no manual steps. A question whose variable
+is set isn't asked; any other question takes its default (or your current setting on an upgrade)
+when there's no terminal. Set `ECOWITT_NO_PROMPT=yes` to stop it asking anything even when it's run
+at a terminal. Add `--yes` so that `weectl` doesn't ask for confirmation either.
+
+```bash
+sudo ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver ECOWITT_RAIN_SOURCE=both \
+     ECOWITT_CATCHUP=device ECOWITT_LOOP_JSON=no ECOWITT_MQTT=no \
+     weectl extension install --yes weewx-EcowittGateway-<version>.zip
+```
+
+Put the variables after `sudo` as shown (or use `sudo env VAR=value …`): `sudo` doesn't pass on
+variables exported earlier. A Vagrant shell provisioner already runs as root, so `export` works
+there.
+
+| Variable | Values | Question |
+|---|---|---|
+| `ECOWITT_NO_PROMPT` | yes/no | Never prompt, even at a terminal |
+| `ECOWITT_IP_ADDRESS` | IP address or `host:port` | Gateway IP address |
+| `ECOWITT_POLL_INTERVAL` | seconds | Poll interval |
+| `ECOWITT_MODE` | `driver`, `service`, `skip` | How to use the gateway (defaults to `driver` when `ECOWITT_IP_ADDRESS` is set) |
+| `ECOWITT_RAIN_SOURCE` | `both`, `tipping`, `piezo` | Rain gauges to use (driver mode) |
+| `ECOWITT_CATCHUP` | `either`, `device`, `net`, `none` | Where to fetch missed data from |
+| `ECOWITT_API_KEY`, `ECOWITT_APP_KEY` | text | Ecowitt.net keys |
+| `ECOWITT_SENSOR_MAP` | yes/no | Lock multi-channel sensors to their channels (default yes) |
+| `ECOWITT_SHOW_ALL_BATT` | yes/no | Show battery state for sensors with no signal |
+| `ECOWITT_LOOP_ON_INIT` | yes/no | Keep retrying at start-up (driver mode, default yes) |
+| `ECOWITT_LOOP_JSON` | yes/no | Write `ecwLoop.json` |
+| `ECOWITT_LOOP_JSON_LOCATION` | `web`, `data`, `tmp`, `custom` | Where to write it |
+| `ECOWITT_LOOP_JSON_PATH` | folder or file path | Custom location (setting this on its own means `custom`) |
+| `ECOWITT_LOOP_JSON_UNITS` | `native`, `us`, `metric`, `metricwx` | Units in the file |
+| `ECOWITT_MQTT` | yes/no | Publish to an MQTT broker |
+| `ECOWITT_MQTT_HOST`, `ECOWITT_MQTT_PORT` | host name, port | Broker address |
+| `ECOWITT_MQTT_TLS` | yes/no | Encrypted connection |
+| `ECOWITT_MQTT_USERNAME`, `ECOWITT_MQTT_PASSWORD` | text | Broker login |
+| `ECOWITT_MQTT_TOPIC` | text | Topic (default `weewx/ecowitt`) |
+| `ECOWITT_MQTT_FORMAT` | `json`, `individual`, `both` | Message format |
+| `ECOWITT_MQTT_UNITS` | `native`, `us`, `metric`, `metricwx` | Units |
+| `ECOWITT_MQTT_RETAIN` | yes/no | Retain messages on the broker |
+| `ECOWITT_MQTT_CA_CERTS` | file path | CA certificate for a private certificate authority |
+
+Yes/no values also accept `y`/`n`, `true`/`false`, `on`/`off` and `1`/`0`. Each answer taken from a
+variable is printed (passwords and keys as `********`). All the variables are checked before
+anything is changed: a bad value stops the install with a message such as
+`ECOWITT_MODE='drvier' is not one of: driver, service, skip` and leaves `weewx.conf` alone, and a
+misspelt name is reported as an unknown setting. If the gateway can't be reached when the address
+comes from `ECOWITT_IP_ADDRESS`, the installer says so and carries on with that address.
+
+A Vagrant example:
+
+```ruby
+config.vm.provision "shell", inline: <<-SHELL
+  export ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver ECOWITT_CATCHUP=device
+  weectl extension install --yes /vagrant/weewx-EcowittGateway-<version>.zip
+  systemctl restart weewx
+SHELL
+```
+
+Settings the installer doesn't ask about (for example `log_next_update`, or a `debug` option) can be
+set afterwards with any config tool, or with `sed`, before WeeWX is started.
 
 ---
 
@@ -136,7 +201,7 @@ It saves the default settings with `ip_address = replace_me` and doesn't change 
 
 ```bash
 # 1. Install the extension and answer the prompts
-sudo weectl extension install weewx-EcowittGateway-1.1.1.zip
+sudo weectl extension install weewx-EcowittGateway-1.2.0.zip
 
 # 2. Check it can talk to the gateway
 sudo weectl device --live-data
@@ -149,7 +214,7 @@ sudo journalctl -u weewx -f
 When it's working, the log shows lines like:
 
 ```
-EcowittHttpDriver: version is 1.1.1
+EcowittHttpDriver: version is 1.2.0
      device IP address is 192.168.1.100
 EcowittHttpCollector startup
 Using 'rain.0x13.val' for rain total
@@ -161,7 +226,7 @@ Using 'rain.0x13.val' for rain total
 sudo systemctl stop weewx
 sudo weectl extension list                       # note the old extension's name
 sudo weectl extension uninstall <old-name>       # or delete /etc/weewx/bin/user/ecowitt_http.py
-sudo weectl extension install weewx-EcowittGateway-1.1.1.zip
+sudo weectl extension install weewx-EcowittGateway-1.2.0.zip
 sudo systemctl start weewx
 ```
 
@@ -222,7 +287,7 @@ source ~/weewx-venv/bin/activate
 source ~/weewx-venv/bin/activate
 
 # 1. Install the extension and answer the prompts
-weectl extension install weewx-EcowittGateway-1.1.1.zip
+weectl extension install weewx-EcowittGateway-1.2.0.zip
 
 # 2. Check it can talk to the gateway
 weectl device --live-data
@@ -244,7 +309,7 @@ source ~/weewx-venv/bin/activate
 sudo systemctl stop weewx                        # or stop weewxd
 weectl extension list
 weectl extension uninstall <old-name>            # or delete ~/weewx-data/bin/user/ecowitt_http.py
-weectl extension install weewx-EcowittGateway-1.1.1.zip
+weectl extension install weewx-EcowittGateway-1.2.0.zip
 sudo systemctl start weewx
 ```
 
@@ -297,7 +362,7 @@ For service mode, leave `station_type` alone and add
 
 `weectl device …` covers most needs.
 
-`weectl device --list-sensors` and `weectl device --dump-api` also work there.
+`weectl device --list-sensors`, `weectl device --dump-api` and `weectl device --active-map` also work there.
 
 The extra tools (`--discover`, `--test-driver`, `--test-service`, `--weewx-fields`, `--default-map`,
 `--driver-map`, `--service-map`) need the module to be run directly:

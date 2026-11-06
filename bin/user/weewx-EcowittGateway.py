@@ -141,6 +141,7 @@ DEFAULT_FILTER_BATTERY = False
 DEFAULT_FW_CHECK_INTERVAL = 86400
 DEFAULT_ONLY_REGISTERED_SENSORS = False
 DEFAULT_GET_SOILAD = True
+DEFAULT_LOG_NEXT_UPDATE = True
 
 BOLD, ENDC = '\x1b[1m', '\x1b[0m'
 
@@ -639,7 +640,10 @@ class HttpMapper(FieldMapper):
             if w_field not in weewx.units.obs_group_dict and e_field in DEFAULT_GROUPS:
                 weewx.units.obs_group_dict[w_field] = DEFAULT_GROUPS[e_field]
         if getattr(driver_debug, 'any', False) or weewx.debug > 0:
-            log.info('     field map is %s', natural_sort_dict(self.field_map))
+            log.info('     field map has %d entries; the fields this device reports are logged after '
+                     'the first poll', len(self.field_map))
+        if weewx.debug >= 2:
+            log_dict('     field map is ', self.field_map)
 
 
 class SdMapper(FieldMapper):
@@ -1106,8 +1110,10 @@ class EcowittCommon:
             log_unknown_fields=to_bool(ec_config.get('log_unknown_fields', False)),
             fw_update_check_interval=int(ec_config.get('firmware_update_check_interval', DEFAULT_FW_CHECK_INTERVAL)),
             sensor_map=ec_config.get('sensor_map'), api=ec_config.get('api', DEFAULT_API),
-            tcp_port=to_int(ec_config.get('tcp_port', DEFAULT_TCP_PORT)), debug=dbg)
+            tcp_port=to_int(ec_config.get('tcp_port', DEFAULT_TCP_PORT)), debug=dbg,
+            log_next_update=to_bool(ec_config.get('log_next_update', DEFAULT_LOG_NEXT_UPDATE)))
         self.rain, self.piezo, self.lightning = self._trackers()
+        self.active_fields = set()
         self.loop_json = LoopJsonWriter(ec_config.get('loop_json', {}), html_dir)
         self.mqtt = MqttPublisher(ec_config.get('mqtt', {}))
 
@@ -1141,12 +1147,27 @@ class EcowittCommon:
         if self.driver_debug.loop if loop_debug is None else loop_debug:
             ts = data.get('dateTime', data.get('datetime'))
             ts_str = f'{timestamp_to_string(ts)} ' if ts is not None else ''
-            log.info('%s: %s%s', label, ts_str, natural_sort_dict(data))
+            log_dict(f'{label}: {ts_str}', data)
         else:
             self.log_subset(data, label)
 
+    def log_active_map(self, data):
+        """Log the part of the field map the device is reporting: in full after the first poll, then
+        any fields that appear later (a sensor added or coming back into range). Debug only."""
+        if not (self.driver_debug.any or weewx.debug > 0):
+            return
+        active = {w: s for w, s in self.mapper.field_map.items() if s in data and w not in self.active_fields}
+        if not active:
+            return
+        if self.active_fields:
+            log_dict(f'     {len(active)} more field(s) now reported: ', active)
+        else:
+            log_dict(f'     active field map ({len(active)} of {len(self.mapper.field_map)} entries) is ', active)
+        self.active_fields.update(active)
+
     def process_live_data(self, data, packet, wbgt_us=False):
         """Update the counters from live data and add derived fields to packet."""
+        self.log_active_map(data)
         self.rain.update(data)
         self.piezo.update(data)
         if 'lightning.count' in data:
@@ -1200,8 +1221,8 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
         verbose = dbg.loop or dbg.rain or dbg.wind
         packet = event.packet
         if verbose:
-            log.info('EcowittHttpService: Processing loop packet: %s %s',
-                     timestamp_to_string(packet['dateTime']), natural_sort_dict(packet))
+            log_dict(f"EcowittHttpService: Processing loop packet: {timestamp_to_string(packet['dateTime'])} ",
+                     packet)
         self.latest_sensor_data = None
         while True:
             try:
@@ -1257,7 +1278,7 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
     def augment_packet(self, packet, data):
         converted = weewx.units.StdUnitConverters[packet['usUnits']].convertDict(data)
         if self.driver_debug.loop:
-            log.info('EcowittHttpService: Converted %s data: %s', self.model, natural_sort_dict(converted))
+            log_dict(f'EcowittHttpService: Converted {self.model} data: ', converted)
         for field, value in converted.items():
             packet.setdefault(field, value)
 
@@ -1498,6 +1519,10 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
         # How often to check for device firmware updates, 0 disables firmware
         # update checks. Available firmware updates are logged.
         firmware_update_check_interval = {DEFAULT_FW_CHECK_INTERVAL:d}
+
+        # whether to log 'Next update in N seconds' after each poll when debug
+        # is set in weewx.conf
+        log_next_update = True
 """
 
     def prompt_for_settings(self):
@@ -1653,6 +1678,7 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
                 f'            [--show-all-batt]\n            [--debug=0|1|2|3]\n'
                 f'       %prog --sensors\n            {common}[--show-all-batt]\n            [--debug=0|1|2|3]\n'
                 f'       %prog --list-sensors\n            {common}[--no-sensor-map]\n            [--debug=0|1|2|3]\n'
+                f'       %prog --active-map\n            {common}[--no-sensor-map]\n            [--debug=0|1|2|3]\n'
                 f'       %prog --dump-api\n            {common}[--output=FILE] [--unmask]\n'
                 f'       %prog --firmware|--mac-address|--system-params|\n'
                 f'            --get-rain-data|--get-all-rain_data\n            {common}[--debug=0|1|2|3]\n'
@@ -1673,6 +1699,7 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
                  'list multi-channel sensors by hardware ID with their channels and WeeWX fields'),
                 ('--dump-api', 'dump_api', 'save every raw API response as JSON (passwords masked)'),
                 ('--no-sensor-map', 'no_sensor_map', 'ignore [[sensor_map]] and show gateway channels'),
+                ('--active-map', 'active_map', 'display the field map entries the device is reporting now'),
                 ('--firmware', 'firmware', 'display device firmware information'),
                 ('--mac-address', 'mac', 'display device station MAC address'),
                 ('--system-params', 'sys_params', 'display device system parameters'),
@@ -2079,10 +2106,11 @@ class EcowittHttpCollector:
                  retry_wait=DEFAULT_RETRY_WAIT, url_timeout=DEFAULT_URL_TIMEOUT, unit_system=DEFAULT_UNIT_SYSTEM,
                  show_battery=DEFAULT_FILTER_BATTERY, log_unknown_fields=False, get_soilad=DEFAULT_GET_SOILAD,
                  fw_update_check_interval=DEFAULT_FW_CHECK_INTERVAL, sensor_map=None, api=DEFAULT_API,
-                 tcp_port=DEFAULT_TCP_PORT, debug=None):
+                 tcp_port=DEFAULT_TCP_PORT, debug=None, log_next_update=DEFAULT_LOG_NEXT_UPDATE):
         self.queue = queue.Queue()
         self.poll_interval = poll_interval
         self.debug = debug or DebugOptions()
+        self.log_next_update = log_next_update
         self.fw_update_check_interval = fw_update_check_interval
         self.get_soilad = get_soilad
         if fw_update_check_interval > 0:
@@ -2125,7 +2153,7 @@ class EcowittHttpCollector:
                 if self.debug.collector:
                     log.info('Collected data: %s', data)
                 self.queue.put(data)
-                if weewx.debug:
+                if weewx.debug and self.log_next_update:
                     log.info('Next update in %d seconds', self.poll_interval)
                 last_poll = now
                 if 0 < self.fw_update_check_interval < now - last_fw_check:
@@ -3429,6 +3457,30 @@ def natural_sort_dict(source_dict):
     return '{' + ', '.join(f"'{k}': '{source_dict[k]}'" for k in natural_sort_keys(source_dict)) + '}'
 
 
+# Longest dict text put in one log message. Syslog daemons cut long messages off (rsyslog's default
+# $MaxMessageSize is 8 kB), so longer dicts are logged over several numbered lines.
+LOG_LINE_MAX = 3000
+
+
+def log_dict(label, source_dict, width=LOG_LINE_MAX):
+    """Log a dict sorted by key at the info level, split over several lines if it is long."""
+    items = [f"'{k}': '{source_dict[k]}'" for k in natural_sort_keys(source_dict)]
+    lines, line = [], ''
+    for item in items:
+        if line and len(line) + len(item) + 2 > width:
+            lines.append(line)
+            line = item
+        else:
+            line = f'{line}, {item}' if line else item
+    lines.append(line)
+    if len(lines) == 1:
+        log.info('%s{%s}', label, lines[0])
+        return
+    for n, line in enumerate(lines, 1):
+        log.info('%s(part %d of %d) %s%s%s', label, n, len(lines), '{' if n == 1 else '', line,
+                 '}' if n == len(lines) else ',')
+
+
 def bytes_to_hex(iterable, separator=' ', caps=True):
     fmt = '{:02X}' if caps else '{:02x}'
     try:
@@ -3514,7 +3566,7 @@ class DirectEcowittDevice:
                (('list_sensors',), 'display_sensor_list'), (('dump_api',), 'dump_api'),
                (('live',), 'display_live_data'), (('discover',), 'display_discovered_devices'),
                (('map',), 'display_field_map'), (('driver_map',), 'display_driver_field_map'),
-               (('service_map',), 'display_service_field_map'))
+               (('service_map',), 'display_service_field_map'), (('active_map',), 'display_active_field_map'))
 
     def __init__(self, namespace, arg_parser, stn_dict, **kwargs):
         self.namespace = namespace
@@ -4208,6 +4260,20 @@ class DirectEcowittDevice:
             if driver:
                 driver.closePort()
 
+    def display_active_field_map(self):
+        """Print the entries of the driver's field map whose gateway fields the device is reporting now."""
+        def run(driver):
+            data = driver.collector.get_current_data()
+            field_map = driver.mapper.field_map
+            active = {w: s for w, s in field_map.items() if s in data}
+            self.print_field_map(active, 'Ecowitt HTTP driver active field map (fields the device is reporting now):',
+                                 'driver')
+            print()
+            print(f'{len(active)} of the {len(field_map)} field map entries are in use. Sensors that are')
+            print('offline or still registering are not shown; --driver-map shows the full map.')
+
+        self.run_driver(run)
+
     def engine_config(self):
         service = f'{DRIVER_MODULE}.EcowittHttpService'
         config = {'Station': {'station_type': 'Simulator', 'altitude': [0, 'meter'], 'latitude': 0, 'longitude': 0},
@@ -4361,6 +4427,10 @@ def main():
                 --default-map|--driver-map|--service-map
                      [CONFIG_FILE|--config=CONFIG_FILE]
                      [--debug=0|1|2|3]
+                --active-map
+                     [CONFIG_FILE|--config=CONFIG_FILE]
+                     [--ip-address=IP_ADDRESS] [--no-sensor-map]
+                     [--debug=0|1|2|3]
                 --discover
                      [CONFIG_FILE|--config=CONFIG_FILE]
                      [--debug=0|1|2|3]{ENDC}
@@ -4381,6 +4451,7 @@ def main():
             ('--weewx-fields', 'weewx_fields', 'display WeeWX loop packet fields emitted by the current configuration'),
             ('--default-map', 'map', 'display the default field map'),
             ('--driver-map', 'driver_map', 'display the field map that would be used by the driver'),
+            ('--active-map', 'active_map', 'display the driver field map entries the device is reporting now'),
             ('--service-map', 'service_map', 'display the field map that would be used by the service'),
             ('--firmware', 'firmware', 'display device firmware information'),
             ('--mac', 'mac', 'display device MAC address'),

@@ -5,6 +5,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 
+## [1.2.0] – 6 November 2026
+
+### Added
+
+- The `ws68_batt` field is back: the battery voltage of a WS68 wind and solar array, kept out of
+  `ws80_batt` as in 1.1.1. Unlike 1.1.0, no database column is added automatically; it's in loop
+  packets, MQTT and `ecwLoop.json`, and is archived only if you add the column yourself (see
+  *Upgrading*).
+- Scripted installs: every installer question can be answered with an `ECOWITT_*` environment
+  variable (for example `ECOWITT_IP_ADDRESS`, `ECOWITT_MODE`, `ECOWITT_RAIN_SOURCE`), so an install
+  can run end to end from Vagrant, Ansible or a script. `ECOWITT_NO_PROMPT=yes` stops all prompts
+  even at a terminal. Values are checked before `weewx.conf` is touched. See INSTALL.md,
+  *Scripted (unattended) install*.
+- `log_next_update` option (default `True`): set it to `False` to keep `debug = 1` without the
+  `Next update in N seconds` line after every poll.
+- `--active-map` (also `weectl device --active-map`) lists only the field map entries the gateway
+  is filling now, instead of the whole 500-entry map.
+- With debug logging on, the active field map is logged after the first poll, and any fields that
+  appear later (a sensor added or back in range) are logged as they appear.
+
+### Changed
+
+- With `debug = 1` the start-up log gives the size of the field map instead of the whole map;
+  the full map is logged at `debug = 2`.
+- Long log lines (the field map, and loop packets with `debug = loop`) are split over numbered
+  lines of about 3,000 characters. On one line the field map was about 17 kB, and syslog daemons
+  with a message size limit (rsyslog's default is 8 kB) cut it off.
+- The WH68 battery state (`weectl device --sensors`) is worked out from whichever form the gateway
+  reports: a 0/1 low-battery flag or a 0–5 level over the HTTP API (it depends on the gateway), or
+  the voltage over the TCP API (1.2 V or less is low).
+
+### Upgrading
+
+- To archive `ws68_batt`: `weectl database add-column ws68_batt --type=REAL`. If you dropped the
+  column after 1.1.1, this adds it back. Without the column, nothing else changes.
+- `log_next_update = True` is added to `[EcowittGateway]` when the extension is installed over an
+  existing one; your other settings are kept.
+
 ## [1.1.1] – 25 October 2026
 
 ### Removed

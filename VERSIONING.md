@@ -41,7 +41,7 @@ weectl extension list
 python3 weewx-EcowittGateway.py --version
 ```
 
-It also appears in the WeeWX log at start-up (`EcowittHttpDriver: version is 1.1.1`).
+It also appears in the WeeWX log at start-up (`EcowittHttpDriver: version is 1.2.0`).
 
 ## Release history and roadmap
 
@@ -55,7 +55,10 @@ It also appears in the WeeWX log at start-up (`EcowittHttpDriver: version is 1.1
    reported as `ws80_batt`.
 6. **1.1.1** (25 October 2026): `ws68_batt` removed again; a WS68's battery is reported in
    `wh68_batt` only, and its voltage is still kept out of `ws80_batt`.
-7. **1.x:** new sensors and features (MINOR) and bug fixes (PATCH), with `b`/`rc` pre-releases for
+7. **1.2.0** (6 November 2026): `ws68_batt` back as a field (no automatic database column),
+   better WH68 battery state, scripted installs, `log_next_update`, `--active-map`, and long log
+   lines split so syslog doesn't cut them off.
+8. **1.x:** new sensors and features (MINOR) and bug fixes (PATCH), with `b`/`rc` pre-releases for
    testing where useful.
 
 ## Release checklist

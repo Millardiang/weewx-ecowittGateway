@@ -24,6 +24,12 @@ with the [EcowittGateway] section placed directly after [Station]. Settings
 in an [EcowittHttp] section (earlier versions, or ecowitt_http.py) are moved
 to [EcowittGateway]. When run without a terminal (for example from a script)
 it uses the defaults or the existing settings.
+
+Every question can also be answered from an ECOWITT_* environment variable
+(see SETTINGS below and INSTALL.md), so an install can be fully scripted:
+    sudo ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \\
+        weectl extension install --yes weewx-EcowittGateway-<version>.zip
+ECOWITT_NO_PROMPT=yes stops the installer asking anything, even at a terminal.
 """
 
 import getpass
@@ -41,7 +47,7 @@ import weewx
 
 from weecfg.extension import ExtensionInstaller
 
-VERSION = '1.1.1'
+VERSION = '1.2.0'
 MODULE = 'weewx-EcowittGateway'
 SECTION = 'EcowittGateway'
 LEGACY_SECTION = 'EcowittHttp'
@@ -66,7 +72,7 @@ EXTRACTORS = {
              'pm10_24h_avg', 'co2_24h_avg', 'wh25_batt', 'wh26_batt', *_rng('wh31_ch{}_batt', 8),
              *_rng('wn35_ch{}_batt', 8), 'wh40_batt', 'wn20_batt', 'wn38_batt', *_rng('wh41_ch{}_batt', 4),
              'wh45_batt', *_rng('wh51_ch{}_batt', 16), *_rng('wh55_ch{}_batt', 4), 'wh57_batt', 'wh65_batt',
-             'wh68_batt', 'wh69_batt', 'ws80_batt', 'ws85_batt', 'ws90_batt', 'ws85cap_volt', 'ws90cap_volt',
+             'wh68_batt', 'wh69_batt', 'ws68_batt', 'ws80_batt', 'ws85_batt', 'ws90_batt', 'ws85cap_volt', 'ws90cap_volt',
              'ws1900batt', 'console_batt', 'consoleext_batt', *_rng('ldsbatt{}', 4)],
 }
 FIRSTLAST = ('model', 'stationtype', 'apName')
@@ -103,6 +109,8 @@ DRIVER_CONFIG = f"""
     show_all_batt = False
     # whether to log unknown API fields at the info level
     log_unknown_fields = False
+    # whether to log 'Next update in N seconds' after each poll when debug is set
+    log_next_update = True
     # how often to check for device firmware updates (seconds), 0 disables
     firmware_update_check_interval = 86400
 
@@ -160,6 +168,75 @@ CHANNEL_MODELS = {'wn31': 'wn31', 'wh31': 'wn31', 'wn34': 'wn34', 'wh34': 'wn34'
                   'wh41': 'wh41', 'wh51': 'wh51', 'wh54': 'wh54', 'wh55': 'wh55'}
 PIEZO_MODELS = ('ws85', 'ws90', 'wh85', 'wh90')
 
+# Answers that can be given in ECOWITT_<NAME> environment variables instead of at the prompts.
+# The kind is 'text', 'required' (text that can't be empty), 'int', 'bool' or a tuple of choices.
+ENV_PREFIX = 'ECOWITT_'
+UNITS = ('native', 'us', 'metric', 'metricwx')
+SETTINGS = {
+    'NO_PROMPT': 'bool',
+    'IP_ADDRESS': 'required',
+    'POLL_INTERVAL': 'int',
+    'MODE': ('driver', 'service', 'skip'),
+    'RAIN_SOURCE': ('both', 'tipping', 'piezo'),
+    'CATCHUP': ('either', 'device', 'net', 'none'),
+    'API_KEY': 'text',
+    'APP_KEY': 'text',
+    'SENSOR_MAP': 'bool',
+    'SHOW_ALL_BATT': 'bool',
+    'LOOP_ON_INIT': 'bool',
+    'LOOP_JSON': 'bool',
+    'LOOP_JSON_LOCATION': ('web', 'data', 'tmp', 'custom'),
+    'LOOP_JSON_PATH': 'required',
+    'LOOP_JSON_UNITS': UNITS,
+    'MQTT': 'bool',
+    'MQTT_HOST': 'required',
+    'MQTT_TLS': 'bool',
+    'MQTT_PORT': 'int',
+    'MQTT_USERNAME': 'text',
+    'MQTT_PASSWORD': 'text',
+    'MQTT_TOPIC': 'required',
+    'MQTT_FORMAT': ('json', 'individual', 'both'),
+    'MQTT_UNITS': UNITS,
+    'MQTT_RETAIN': 'bool',
+    'MQTT_CA_CERTS': 'text',
+}
+SECRETS = ('API_KEY', 'APP_KEY', 'MQTT_PASSWORD')
+YES, NO = ('y', 'yes', 'true', 'on', '1'), ('n', 'no', 'false', 'off', '0')
+
+
+class SettingError(ValueError):
+    """An ECOWITT_* environment variable has a value the installer can't use."""
+
+
+def _env(name):
+    """The stripped value of environment variable ECOWITT_<name>, or None if it isn't set."""
+    value = os.environ.get(ENV_PREFIX + name)
+    return None if value is None else value.strip()
+
+
+def _env_bool(name):
+    value = _env(name)
+    return None if value is None else value.lower() in YES
+
+
+def check_env():
+    """Check every ECOWITT_* variable before anything is changed; returns warnings for unknown names."""
+    warnings = []
+    for var in sorted(v for v in os.environ if v.startswith(ENV_PREFIX)):
+        name, value = var[len(ENV_PREFIX):], _env(var[len(ENV_PREFIX):])
+        kind = SETTINGS.get(name)
+        if kind is None:
+            warnings.append(f'Ignoring unknown setting {var}')
+        elif kind == 'required' and not value:
+            raise SettingError(f'{var} is empty')
+        elif kind == 'int' and not (value.isdigit() and int(value) > 0):
+            raise SettingError(f"{var}='{value}' is not a whole number above 0")
+        elif kind == 'bool' and value.lower() not in YES + NO:
+            raise SettingError(f"{var}='{value}' is not yes or no")
+        elif isinstance(kind, tuple) and value.lower() not in kind:
+            raise SettingError(f"{var}='{value}' is not one of: {', '.join(kind)}")
+    return warnings
+
 
 def _version_tuple(version):
     """'5.4.0', '5.5.2b1' -> (5, 4, 0), (5, 5, 2)"""
@@ -205,10 +282,28 @@ class EcowittGatewayInstaller(ExtensionInstaller):
 
     @staticmethod
     def _interactive():
-        return sys.stdin is not None and sys.stdin.isatty()
+        return sys.stdin is not None and sys.stdin.isatty() and not _env_bool('NO_PROMPT')
 
-    def _ask(self, prompt, default, options=None):
-        """Prompt for a value; returns the default when there is no terminal."""
+    def _from_env(self, prompt, name, options=None):
+        """The answer to a question from ECOWITT_<name>, or None if that isn't set."""
+        value = _env(name) if name else None
+        if value is None:
+            return None
+        if options:
+            value = value.lower()
+            if value not in options:
+                raise SettingError(f"{ENV_PREFIX}{name}='{value}' can't be used here: use one of "
+                                   f"{', '.join(options)}")
+        shown = '********' if name in SECRETS and value else value
+        self._out(getattr(self, '_engine', None), f'{prompt.rstrip("?")}: {shown}  (from {ENV_PREFIX}{name})')
+        return value
+
+    def _ask(self, prompt, default, options=None, env=None):
+        """Prompt for a value. The answer comes from ECOWITT_<env> if it is set, and is the default
+        when there is no terminal."""
+        value = self._from_env(prompt, env, options)
+        if value is not None:
+            return value
         if not self._interactive():
             return default
         opts = f" ({'/'.join(options)})" if options else ''
@@ -218,7 +313,12 @@ class EcowittGatewayInstaller(ExtensionInstaller):
                 return answer.lower() if options else answer
             print(f"    Please enter one of: {', '.join(options)}")
 
-    def _ask_yes(self, prompt, default=True):
+    def _ask_yes(self, prompt, default=True, env=None):
+        if env and _env(env) is not None:
+            answer = _env_bool(env)
+            self._out(getattr(self, '_engine', None),
+                      f"{prompt.rstrip('?')}: {'yes' if answer else 'no'}  (from {ENV_PREFIX}{env})")
+            return answer
         return self._ask(prompt, 'y' if default else 'n', ['y', 'n']) == 'y'
 
     @staticmethod
@@ -312,6 +412,7 @@ class EcowittGatewayInstaller(ExtensionInstaller):
     # -- configuration -------------------------------------------------------
 
     def configure(self, engine):
+        self._engine = engine
         config_dict = engine.config_dict
         legacy = SECTION not in config_dict and LEGACY_SECTION in config_dict
         existing = config_dict.get(LEGACY_SECTION if legacy else SECTION, {})
@@ -319,9 +420,12 @@ class EcowittGatewayInstaller(ExtensionInstaller):
         def out(msg=''):
             self._out(engine, msg)
 
+        for warning in check_env():   # raises SettingError before anything is changed
+            out(warning)
         out()
         out('Configuring weewx-EcowittGateway')
-        out('Press Enter to accept the value shown in [brackets].')
+        if self._interactive():
+            out('Press Enter to accept the value shown in [brackets].')
         out()
         if legacy:
             out(f'Existing [{LEGACY_SECTION}] settings found; they will be moved to [{SECTION}].')
@@ -329,19 +433,23 @@ class EcowittGatewayInstaller(ExtensionInstaller):
 
         # gateway address, checked by contacting the device
         ip = existing.get('ip_address', 'replace_me')
+        ip_from_env = _env('IP_ADDRESS') is not None
         model = gauges = channels = None
         while True:
-            ip = self._ask('Gateway IP address, eg 192.168.1.100', ip)
-            if ip == 'replace_me' or not self._interactive():
+            ip = self._ask('Gateway IP address, eg 192.168.1.100', ip, env='IP_ADDRESS')
+            if ip == 'replace_me' or not (self._interactive() or ip_from_env):
                 break
             model, gauges, channels = self._probe(ip)
             if model:
                 out(f'    Found {model} at {ip}')
                 break
             out(f'    No response from a gateway at {ip}.')
+            if ip_from_env or not self._interactive():
+                out('    Using this address anyway; paired sensors and rain gauges could not be checked.')
+                break
             if self._ask_yes('    Use this address anyway?', default=False):
                 break
-        poll = self._ask('Poll interval in seconds', existing.get('poll_interval', 20))
+        poll = self._ask('Poll interval in seconds', existing.get('poll_interval', 20), env='POLL_INTERVAL')
 
         station_type = config_dict.get('Station', {}).get('station_type')
         if station_type in (SECTION, LEGACY_SECTION):
@@ -349,9 +457,9 @@ class EcowittGatewayInstaller(ExtensionInstaller):
         elif existing.get('ip_address', 'replace_me') != 'replace_me':
             default_mode = 'service'
         else:
-            default_mode = 'driver' if self._interactive() else 'skip'
+            default_mode = 'driver' if self._interactive() or ip_from_env else 'skip'
         mode = self._ask('Use as the station driver, as a service alongside another driver, or skip',
-                         default_mode, ['driver', 'service', 'skip'])
+                         default_mode, ['driver', 'service', 'skip'], env='MODE')
         if mode == 'driver' and ip == 'replace_me':
             out('    No gateway IP address given, so the station driver is not being changed.')
             mode = 'skip'
@@ -361,36 +469,44 @@ class EcowittGatewayInstaller(ExtensionInstaller):
         if mode == 'driver':
             if gauges:
                 out(f"    Paired rain gauges: {' and '.join(sorted(gauges))}")
-            if gauges == {'piezo'}:
+            if _env('RAIN_SOURCE') is not None:
+                rain_source = self._ask('Rain gauges to use', rain_source, ['both', 'tipping', 'piezo'],
+                                        env='RAIN_SOURCE')
+            elif gauges == {'piezo'}:
                 rain_source = 'piezo'
             elif gauges == {'tipping'}:
                 rain_source = 'tipping'
             else:
-                out("    both    = record both gauges: tipping in 'rain'/'rainRate', "
-                    "piezo in 'p_rain'/'hail'/'p_rainrate'")
-                out("    tipping = WeeWX 'rain'/'rainRate' from the tipping gauge")
-                out("    piezo   = WeeWX 'rain'/'rainRate' from the piezo gauge")
-                rain_source = self._ask('Rain gauges to use', rain_source, ['both', 'tipping', 'piezo'])
+                if self._interactive():
+                    out("    both    = record both gauges: tipping in 'rain'/'rainRate', "
+                        "piezo in 'p_rain'/'hail'/'p_rainrate'")
+                    out("    tipping = WeeWX 'rain'/'rainRate' from the tipping gauge")
+                    out("    piezo   = WeeWX 'rain'/'rainRate' from the piezo gauge")
+                rain_source = self._ask('Rain gauges to use', rain_source, ['both', 'tipping', 'piezo'],
+                                        env='RAIN_SOURCE')
 
         catchup = existing.get('catchup', {}).get('source', 'either')
         if model and model.endswith('(TCP API)'):
             out('    This gateway has no SD card or local HTTP API, so missed data can only come')
             out('    from Ecowitt.net (net), and only if it uploads there.')
             catchup = self._ask('Fetch missed data at startup from', 'net' if catchup == 'device' else catchup,
-                                ['net', 'none', 'either'])
+                                ['net', 'none', 'either'], env='CATCHUP')
         else:
-            catchup = self._ask('Fetch missed data at startup from', catchup, ['either', 'device', 'net', 'none'])
+            catchup = self._ask('Fetch missed data at startup from', catchup, ['either', 'device', 'net', 'none'],
+                                env='CATCHUP')
         api_key, app_key = existing.get('api_key', ''), existing.get('app_key', '')
         if catchup in ('either', 'net') and self._interactive():
             out('    Ecowitt.net keys are only needed to fetch missed data from Ecowitt.net')
             out('    (press Enter to leave them blank).')
-            api_key = self._ask('    Ecowitt.net API key', api_key or '')
-            app_key = self._ask('    Ecowitt.net application key', app_key or '')
+        api_key = self._ask('    Ecowitt.net API key', api_key or '', env='API_KEY') \
+            if catchup in ('either', 'net') else api_key
+        app_key = self._ask('    Ecowitt.net application key', app_key or '', env='APP_KEY') \
+            if catchup in ('either', 'net') else app_key
         sensor_map = self._ask_sensor_map(existing.get('sensor_map', {}), channels, out)
         show_batt = self._ask_yes('Show battery state for sensors with no signal?',
-                                  str(existing.get('show_all_batt', 'False')).lower() == 'true')
+                                  str(existing.get('show_all_batt', 'False')).lower() == 'true', env='SHOW_ALL_BATT')
         loop_on_init = mode != 'driver' or self._ask_yes(
-            'Keep retrying at startup if the gateway cannot be reached (loop_on_init)?', True)
+            'Keep retrying at startup if the gateway cannot be reached (loop_on_init)?', True, env='LOOP_ON_INIT')
         loop_json = self._ask_loop_json(config_dict, existing.get('loop_json', {}), out)
         mqtt = self._ask_mqtt(existing.get('mqtt', {}), out)
 
@@ -468,13 +584,16 @@ class EcowittGatewayInstaller(ExtensionInstaller):
         out('    Locking a sensor to its channel keeps its data in the same WeeWX fields')
         out('    if it is re-paired onto a different gateway channel later.')
         what = 'these sensors' if not current else f'the {len(new)} new sensor(s)'
-        if self._ask_yes(f'Lock {what} to their current channels (sensor_map)?', True):
+        if self._ask_yes(f'Lock {what} to their current channels (sensor_map)?', True, env='SENSOR_MAP'):
             for model, channel, sid in new:
                 result[sid] = (str(channel), model.upper())
         return result
 
-    def _ask_secret(self, prompt, current):
+    def _ask_secret(self, prompt, current, env=None):
         """Ask for a password without echoing it; Enter keeps the current value."""
+        value = self._from_env(prompt, env)
+        if value is not None:
+            return value
         if not self._interactive():
             return current
         hint = ' (Enter keeps the current one)' if current else ' (Enter for none)'
@@ -485,40 +604,43 @@ class EcowittGatewayInstaller(ExtensionInstaller):
         def cur(key, default=''):
             return str(current.get(key, default))
 
-        enable = self._ask_yes('Publish each loop packet to an MQTT broker?', cur('enable', 'False').lower() == 'true')
+        enable = self._ask_yes('Publish each loop packet to an MQTT broker?', cur('enable', 'False').lower() == 'true',
+                               env='MQTT')
         if not enable:
             return {'enable': 'False'}
         if importlib.util.find_spec('paho') is None:
             out('    Note: the paho-mqtt package is needed for MQTT. Install it with')
             out('          sudo apt install python3-paho-mqtt      (Debian package install)')
             out('          pip install paho-mqtt                   (pip install, in the WeeWX environment)')
-        host = self._ask('    Broker host name or IP address', cur('host', 'localhost'))
-        tls = self._ask_yes('    Use an encrypted (TLS) connection?', cur('tls', 'False').lower() == 'true')
+        host = self._ask('    Broker host name or IP address', cur('host', 'localhost'), env='MQTT_HOST')
+        tls = self._ask_yes('    Use an encrypted (TLS) connection?', cur('tls', 'False').lower() == 'true', env='MQTT_TLS')
         default_port = cur('port', '8883' if tls else '1883')
         if tls and default_port == '1883':
             default_port = '8883'
-        port = self._ask('    Broker port', default_port)
+        port = self._ask('    Broker port', default_port, env='MQTT_PORT')
         if self._interactive():
             try:
                 with socket.create_connection((host, int(port)), timeout=3):
                     out(f'    Broker {host}:{port} is reachable')
             except (OSError, ValueError) as e:
                 out(f'    Could not reach {host}:{port} ({e}); the driver will keep retrying once WeeWX starts.')
-        username = self._ask('    Username (Enter for none)', cur('username'))
-        password = self._ask_secret('    Password', cur('password')) if username else ''
-        topic = self._ask('    Topic', cur('topic', 'weewx/ecowitt')).rstrip('/')
-        out(f'    json       = one message with all fields on {topic}/loop')
-        out(f'    individual = one message per field, e.g. {topic}/outTemp')
-        out('    both       = both of the above')
-        fmt = self._ask('    Message format', cur('format', 'json').lower(), ['json', 'individual', 'both'])
-        units = self._ask('    Units', cur('units', 'native').lower(), ['native', 'us', 'metric', 'metricwx'])
+        username = self._ask('    Username (Enter for none)', cur('username'), env='MQTT_USERNAME')
+        password = self._ask_secret('    Password', cur('password'), env='MQTT_PASSWORD') if username else ''
+        topic = self._ask('    Topic', cur('topic', 'weewx/ecowitt'), env='MQTT_TOPIC').rstrip('/')
+        if self._interactive() and _env('MQTT_FORMAT') is None:
+            out(f'    json       = one message with all fields on {topic}/loop')
+            out(f'    individual = one message per field, e.g. {topic}/outTemp')
+            out('    both       = both of the above')
+        fmt = self._ask('    Message format', cur('format', 'json').lower(), ['json', 'individual', 'both'],
+                        env='MQTT_FORMAT')
+        units = self._ask('    Units', cur('units', 'native').lower(), list(UNITS), env='MQTT_UNITS')
         retain = self._ask_yes('    Retain the latest messages on the broker?',
-                               cur('retain', 'False').lower() == 'true')
+                               cur('retain', 'False').lower() == 'true', env='MQTT_RETAIN')
         settings = {'enable': 'True', 'host': host, 'port': port, 'username': username, 'password': password,
                     'topic': topic, 'format': fmt, 'units': units, 'retain': str(retain), 'tls': str(tls)}
         if tls:
             settings['ca_certs'] = self._ask('    CA certificate file (Enter for the system certificates)',
-                                             cur('ca_certs'))
+                                             cur('ca_certs'), env='MQTT_CA_CERTS')
         return settings
 
     def _ask_loop_json(self, config_dict, current, out):
@@ -531,27 +653,35 @@ class EcowittGatewayInstaller(ExtensionInstaller):
         path = str(current.get('path', name))
         location = next((k for k, v in locations.items() if v == path), 'custom')
         enable = self._ask_yes(f'Write each loop packet to {name} (for web pages and scripts)?',
-                               str(current.get('enable', 'False')).lower() == 'true')
+                               str(current.get('enable', 'False')).lower() == 'true', env='LOOP_JSON')
         if not enable:
             return {'enable': 'False'}
-        out(f'    web    = WeeWX web pages folder: {os.path.join(web_dir, name)}')
-        out(f"    data   = WeeWX data folder: {locations['data']}")
-        out(f"    tmp    = {locations['tmp']} (often held in memory, which saves SD card writes)")
-        out('    custom = a folder or file path of your choice')
-        location = self._ask(f'Where should {name} be written', location, ['web', 'data', 'tmp', 'custom'])
+        if _env('LOOP_JSON_PATH') is not None and _env('LOOP_JSON_LOCATION') is None:
+            location = 'custom'   # a path on its own means a custom location
+        else:
+            if self._interactive() and _env('LOOP_JSON_LOCATION') is None:
+                out(f'    web    = WeeWX web pages folder: {os.path.join(web_dir, name)}')
+                out(f"    data   = WeeWX data folder: {locations['data']}")
+                out(f"    tmp    = {locations['tmp']} (often held in memory, which saves SD card writes)")
+                out('    custom = a folder or file path of your choice')
+            location = self._ask(f'Where should {name} be written', location, ['web', 'data', 'tmp', 'custom'],
+                                 env='LOOP_JSON_LOCATION')
         if location == 'custom':
             while True:
-                path = self._ask('    Folder or full file path', path if path not in locations.values() else '')
+                path = self._ask('    Folder or full file path', path if path not in locations.values() else '',
+                                 env='LOOP_JSON_PATH')
                 if path:
                     break
+                if not self._interactive():
+                    raise SettingError(f'{ENV_PREFIX}LOOP_JSON_PATH is needed for a custom {name} location')
                 out('    Please enter a path.')
             folder = path if path.endswith(os.sep) or os.path.isdir(path) else os.path.dirname(path)
             if folder and not os.path.isdir(os.path.expanduser(folder)):
                 out(f'    Note: {folder} does not exist yet; create it and make it writable by WeeWX.')
         else:
             path = locations[location]
-        units = self._ask(f'Units for {name}', str(current.get('units', 'native')).lower(),
-                          ['native', 'us', 'metric', 'metricwx'])
+        units = self._ask(f'Units for {name}', str(current.get('units', 'native')).lower(), list(UNITS),
+                          env='LOOP_JSON_UNITS')
         return {'enable': 'True', 'path': path, 'units': units}
 
     @staticmethod

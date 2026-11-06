@@ -4,7 +4,7 @@ A [WeeWX](https://weewx.com) driver and service for Ecowitt gateways and console
 **local HTTP API**. There's no cloud dependency for live data, and the gateway doesn't need any
 custom-server or upload configuration.
 
-**Version:** 1.1.1 · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
+**Version:** 1.2.0 · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
 
 This driver should be considered a natural evolution of both the GW1000 driver and the
 `ecowitt_local_http` driver: it brings the GW1000/WH2650 (TCP API) and the newer HTTP API gateways
@@ -153,6 +153,7 @@ earlier betas) if there is no `[EcowittGateway]` section; the installer moves it
 | `rain_source` | `tipping` | `both`: tipping gauge in `rain`/`rainRate` and piezo gauge in `p_rain`/`hail`/`p_rainrate`. `tipping` or `piezo`: that gauge feeds `rain`/`rainRate`. |
 | `show_all_batt` | `False` | Report battery state even for sensors with no signal. |
 | `log_unknown_fields` | `False` | Log unknown API groups and fields at info level. |
+| `log_next_update` | `True` | With `debug` set in `weewx.conf`, log `Next update in N seconds` after each poll. Set to `False` to keep debug logging without these lines. |
 | `firmware_update_check_interval` | `86400` | Seconds between firmware update checks (`0` turns them off). Available updates are logged. |
 | `get_soilad` | `True` | Fetch soil moisture AD values when WH51/WH52 sensors are present. |
 | `wn32_indoor` | `False` | Report WH25 battery/signal as an indoor WN32 instead. |
@@ -518,7 +519,18 @@ To list every WeeWX field and the gateway field it comes from:
 ```bash
 python3 weewx-EcowittGateway.py --config=/path/to/weewx.conf --default-map   # built-in defaults
 python3 weewx-EcowittGateway.py --config=/path/to/weewx.conf --driver-map    # what your config will use
+weectl device --active-map                                                   # only what your gateway reports now
 ```
+
+`--active-map` asks the gateway for its current data and lists just the field map entries it is
+filling, which is usually a few dozen of the 500 or so in the full map. Sensors that are offline or
+still registering aren't listed.
+
+With `debug = 1` (or any driver `debug` option) the log shows the size of the field map at
+start-up, then the active field map after the first poll, and a short line whenever more fields
+appear later (for example a sensor coming back into range). `debug = 2` also logs the full map.
+Long dicts are split over numbered lines (`part 1 of 6` …) of about 3,000 characters, so syslog
+daemons with a message size limit (rsyslog's default is 8 kB) don't cut them off.
 
 To change a single mapping, or add a field:
 
@@ -548,6 +560,7 @@ With WeeWX 5, use `weectl device` (it reads your `weewx.conf`):
 | `weectl device --live-data [--units=us\|metric\|metricwx]` | Current values, mapped to WeeWX fields |
 | `weectl device --sensors [--show-all-batt]` | Sensor IDs, signal, RSSI and battery state |
 | `weectl device --list-sensors [--no-sensor-map]` | Multi-channel sensors by hardware ID: gateway channel, reported channel, a live reading and the WeeWX fields fed, plus a ready-made `[[sensor_map]]` |
+| `weectl device --active-map [--no-sensor-map]` | The field map entries your gateway is filling now (WeeWX field: gateway field) |
 | `weectl device --dump-api [--output=FILE] [--unmask]` | Every raw API response as one JSON document, secrets masked |
 | `weectl device --firmware` | Gateway and sensor firmware, and whether an update is available |
 | `weectl device --mac-address` | Gateway MAC address |
@@ -571,6 +584,7 @@ Running the module directly also gives you:
 | `--test-service` | Run the service against a simulated station |
 | `--weewx-fields` | Print one packet of WeeWX fields |
 | `--default-map`, `--driver-map`, `--service-map` | Print the field maps |
+| `--active-map` | Print only the field map entries the gateway is filling now |
 
 See [INSTALL.md](INSTALL.md#running-the-command-line-tools) for how to run the module directly on
 each install type.
@@ -589,6 +603,7 @@ each install type.
 | A sensor is missing from packets | Run `weectl device --sensors`. `sensor is registering...` means the gateway hasn't paired with it yet. |
 | A sensor's readings moved to other WeeWX fields after a battery change or re-pairing | Run `weectl device --list-sensors` and add the `[[sensor_map]]` it suggests, with each ID set to the channel you want. |
 | Need more detail in the log | Add `debug = loop` (or another debug option) to `[EcowittGateway]`, or set `debug = 1` at the top of `weewx.conf`. |
+| Too many `Next update in N seconds` lines with `debug = 1` | Set `log_next_update = False` in `[EcowittGateway]`. |
 
 Logs:
 
@@ -602,7 +617,7 @@ Logs:
 See **[VERSIONING.md](VERSIONING.md)**. In brief:
 
 - releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (e.g. `1.1.0b1`);
-- the current release is 1.1.1; 1.0.0 was the first full release, following the 0.0.1 betas;
+- the current release is 1.2.0; 1.0.0 was the first full release, following the 0.0.1 betas;
 - from 1.0.0 the configuration options and WeeWX field names are frozen: a breaking change needs a
   new MAJOR version;
 - configuration compatibility with `ecowitt_http.py` is kept throughout 1.x.

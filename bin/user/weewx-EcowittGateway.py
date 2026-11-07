@@ -10,7 +10,7 @@ Copyright (C) 2026 Ian Millard
 Derived from the original GW1000 and ecowitt_local_http.py drivers, which both carry the following notice:
     Copyright (C) 2024-25 Gary Roderick                 gjroderick<at>gmail.com
 
-The multi-gateway merge section uses a similar design as weewx-ecowitt-multi:
+The multi-gateway merge follows the design of weewx-ecowitt-multi:
     Copyright (C) 2026 mKainzbauer         https://github.com/mKainzbauer/weewx-ecowitt-multi
 
 This program is free software: you can redistribute it and/or modify it under
@@ -2298,7 +2298,19 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
         ignore_no_signal = False
 """
 
+    # weectl calls prompt_for_settings() only when it may prompt, and before modify_config(). It calls
+    # them on two different instances, so the flag is kept on the class (weectl runs once per process).
+    prompting = False
+
+    def ask(self, prompt, default, options=None):
+        """Ask, or with 'weectl ... --no-prompt' (or no terminal) take the default without asking."""
+        if not (self.prompting and sys.stdin is not None and sys.stdin.isatty()):
+            return default
+        print()
+        return weecfg.prompt_with_options(prompt, default, options)
+
     def prompt_for_settings(self):
+        EcowittHttpDriverConfEditor.prompting = True
         print()
         ip_address = weecfg.prompt_with_options('Specify the device IP address, for example: 192.168.1.100.',
                                                 self.existing_options.get('ip_address'))
@@ -2322,21 +2334,18 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
     def _merge(config_dict, text):
         config_dict.merge(configobj.ConfigObj(io.StringIO(textwrap.dedent(text))))
 
-    @staticmethod
-    def do_loop_on_init(config_dict):
-        print()
+    def do_loop_on_init(self, config_dict):
         prompt = ("The Ecowitt HTTP driver requires a network connection to the device.\n"
                   "Consequently, the absence of a network connection when WeeWX starts will cause\n"
                   "WeeWX to exit. The WeeWX 'loop_on_init' setting can be used to mitigate such\n"
                   "problems by having WeeWX retry startup indefinitely. Set to '0' to attempt\n"
                   "startup once only or '1' to attempt startup indefinitely.")
-        loop_on_init = int(weecfg.prompt_with_options(prompt, config_dict.get('loop_on_init', '1'), ['0', '1']))
+        loop_on_init = int(self.ask(prompt, str(config_dict.get('loop_on_init', '1')), ['0', '1']))
         EcowittHttpDriverConfEditor._merge(config_dict, f'loop_on_init = {loop_on_init:d}')
         if not config_dict.comments['loop_on_init']:
             config_dict.comments['loop_on_init'] = ['', '# Whether to try indefinitely to load the driver']
 
-    @staticmethod
-    def do_rain(config_dict):
+    def do_rain(self, config_dict):
         cls = EcowittHttpDriverConfEditor
         drv_config = config_dict.get(DRIVER_NAME, {})
         mapper = HttpMapper(**drv_config)
@@ -2348,8 +2357,10 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
             print(f'Unable to query the device for paired rain gauges: {e}')
             paired = ()
         paired_str = 'none' if not paired else ('both' if len(paired) == 2 else paired[0])
-        print()
-        paired_gauges = weecfg.prompt_with_options(cls._wrap(
+        current = str(drv_config.get('rain_source', '')).lower()
+        if not self.prompting and current in ('tipping', 'piezo', 'both') and not paired:
+            paired_str = 'both'          # device not reachable: keep the current rain_source
+        paired_gauges = self.ask(cls._wrap(
             "Ecowitt gateways/consoles can simultaneously support both tipping and piezoelectric (piezo) rain "
             "gauges. Select the gauge type(s) paired with this device. Set to 'none' if no gauges are paired, "
             "'tipping' if only a tipping gauge is paired, 'piezo' if only a piezo gauge is paired or 'both' if "
@@ -2380,8 +2391,9 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
         possible = {'both': ['both', 'tipping', 'piezo', 'none'], 'tipping': ['tipping', 'none'],
                     'piezo': ['piezo', 'none']}[paired_gauges]
         default = curr_type if curr_type != 'none' or paired_gauges != 'both' else 'both'
-        print()
-        user_type = weecfg.prompt_with_options(cls._wrap(
+        if not self.prompting and current in possible:
+            default = current            # no prompts: keep rain_source as it is
+        user_type = self.ask(cls._wrap(
             "Choose how the rain gauges are recorded: 'both' records the tipping gauge in 'rain'/'rainRate' and "
             "the piezo gauge in 'p_rain'/'hail'/'p_rainrate'; 'tipping' or 'piezo' feeds WeeWX 'rain'/'rainRate' "
             "from that gauge; 'none' leaves the WeeWX rain fields unpopulated."),

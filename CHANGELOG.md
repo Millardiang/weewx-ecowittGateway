@@ -5,7 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 
-## [1.3.0] – in development
+## [1.3.0] – 7 November 2026
 
 ### Added
 
@@ -50,6 +50,9 @@ follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 ### Fixed
 
+- `weectl station reconfigure --no-prompt`, or any reconfigure without a terminal, failed with
+  `EOFError`: the driver still asked about `loop_on_init` and the rain gauges. Without prompts it now
+  keeps the current settings. (This was also in 1.2.0 and earlier.)
 - SD card catchup: a file on the card whose name doesn't start with a year and month (such as
   `log`) stopped the catchup with an error; such files are now skipped. Taken from
   weewx-ecowitt-multi.
@@ -473,7 +476,8 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 |---|---|---|
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
-[Unreleased]: #unreleased
+[1.3.0]: #130--7-november-2026
+[1.2.0]: #120--6-november-2026
 [1.1.1]: #111--25-october-2026
 [1.1.0]: #110--22-october-2026
 [1.0.2]: #102--21-october-2026--bug-fix

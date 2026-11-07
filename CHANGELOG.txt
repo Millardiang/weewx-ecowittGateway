@@ -5,8 +5,8 @@ All notable changes to weewx-EcowittGateway are recorded here. The format follow
 (https://keepachangelog.com/en/1.1.0/), and version numbers follow the scheme described in
 VERSIONING.md.
 
-[1.3.0] – in development
-========================
+[1.3.0] – 7 November 2026
+=========================
 
 Added
 -----
@@ -52,6 +52,9 @@ Added
 Fixed
 -----
 
+- weectl station reconfigure --no-prompt, or any reconfigure without a terminal, failed with
+  EOFError: the driver still asked about loop_on_init and the rain gauges. Without prompts it now
+  keeps the current settings. (This was also in 1.2.0 and earlier.)
 - SD card catchup: a file on the card whose name doesn't start with a year and month (such as log)
   stopped the catchup with an error; such files are now skipped. Taken from weewx-ecowitt-multi.
 - SD card catchup when ip_address includes a port (192.168.1.100:8080): the files are now read from

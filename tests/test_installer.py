@@ -111,3 +111,23 @@ def test_extractors_match_the_driver():
     installer = {f: x for x, fields in install.EXTRACTORS.items() for f in fields}
     installer.update({f: 'last' for f in install.FIRSTLAST})     # firstlast accumulators, 'last' extractor
     assert driver == installer
+
+
+def test_reconfigure_without_prompts_keeps_the_settings(monkeypatch, gateway):
+    """'weectl station reconfigure --no-prompt' calls modify_config() without prompt_for_settings();
+    1.3.0 and earlier still asked about loop_on_init and the rain gauges, and failed with no terminal."""
+    from conftest import egw_module
+    monkeypatch.setattr(egw_module.EcowittHttpDriverConfEditor, 'prompting', False)
+    monkeypatch.setattr('weecfg.prompt_with_options',
+                        lambda *a, **k: pytest.fail('asked a question with prompting off'))
+    conf = configobj.ConfigObj(io.StringIO("loop_on_init = 0\n" + WEEWX_CONF + f"""
+[EcowittGateway]
+    driver = user.weewx-EcowittGateway
+    ip_address = {gateway.address}
+    api = http
+    rain_source = piezo
+"""), encoding='utf-8')
+    egw_module.EcowittHttpDriverConfEditor().modify_config(conf)
+    assert conf['loop_on_init'] == '0'
+    assert conf['EcowittGateway']['rain_source'] == 'piezo'
+    assert conf['StdWXCalculate']['Calculations']['rain'] == 'prefer_hardware'

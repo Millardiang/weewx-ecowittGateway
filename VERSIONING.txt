@@ -82,7 +82,7 @@ Release history and roadmap
 7. 1.2.0 (6 November 2026): ws68_batt back as a field (no automatic database column), better WH68
    battery state, scripted installs, log_next_update, --active-map, and long log lines split so
    syslog doesn't cut them off.
-8. 1.3.0 (in development): a test suite; the per-gateway code moved into one part (GatewaySource)
+8. 1.3.0 (7 November 2026): a test suite; the per-gateway code moved into one part (GatewaySource)
    ready for a multi-gateway mode; [[limits]], ignore_no_signal, gateway_online, catchup checks,
    --sd-files and --catchup-dry-run; service-mode rain fixes; several gateways ([[sources]]),
    following the design of weewx-ecowitt-multi.

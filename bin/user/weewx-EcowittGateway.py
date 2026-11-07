@@ -10,6 +10,9 @@ Copyright (C) 2026 Ian Millard
 Derived from the original GW1000 and ecowitt_local_http.py drivers, which both carry the following notice:
     Copyright (C) 2024-25 Gary Roderick                 gjroderick<at>gmail.com
 
+The multi-gateway merge follows the design of weewx-ecowitt-multi:
+    Copyright (C) 2026 mKainzbauer         https://github.com/mKainzbauer/weewx-ecowitt-multi
+
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
 Foundation, either version 3 of the License, or (at your option) any later
@@ -22,7 +25,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 1.2.0
+Version: 1.3.0
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -83,7 +86,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '1.2.0'
+DRIVER_VERSION = '1.3.0'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -194,6 +197,7 @@ _OBS_GROUPS = {
     'group_data': ['heap', 'pb'],
     'group_direction': ['windDir10'],
     'group_string': ['apName', 'stationtype'],
+    'group_boolean': ['gateway_online'],
 }
 for _grp, _fields in _OBS_GROUPS.items():
     for _f in _fields:
@@ -396,7 +400,7 @@ class DebugOptions:
     """Driver specific debug switches from the 'debug' config option."""
 
     debug_groups = ('rain', 'raindelta', 'wind', 'lightning', 'loop', 'sensors', 'parser', 'catchup',
-                    'collector', 'archive')
+                    'collector', 'archive', 'merge')
 
     def __init__(self, **config):
         try:
@@ -732,8 +736,8 @@ class DeltaTracker:
                 log.info("%sUsing '%s' for %s total", self.prefix, self.field, self.label)
             elif self.debug is not None and self.debug.rain:
                 log.info('%sNo suitable field found for %s', self.prefix, self.label)
-        if self.field is not None and self.field in data:
-            self.delta = self.calc(data[self.field])
+        # no counter in this data (for example a poll that missed it): no delta, rather than the last one again
+        self.delta = self.calc(data[self.field]) if self.field is not None and self.field in data else None
         return self.delta
 
     def calc(self, new):
@@ -1075,29 +1079,499 @@ class MqttPublisher:
             self.enabled = False
 
 
-class EcowittCommon:
-    """Functionality shared by the driver and the service."""
+class FieldLimits:
+    """[[limits]]: a reading outside '<WeeWX field> = min, max[, unit]' is dropped (set to None).
 
-    def __init__(self, unit_system=None, html_dir=None, **ec_config):
-        self.driver_debug = dbg = DebugOptions(**ec_config)
-        self.mapper = HttpMapper(driver_debug=dbg, **ec_config)
+    Without a unit, min and max are in the driver's own units (METRICWX: degree_C, meter_per_second,
+    hPa, mm, mm_per_hour). Leave min or max empty (or 'None') for no limit on that side.
+    """
+
+    def __init__(self, config=None, label=''):
+        self.limits, self.label, self.reported = {}, label, set()
+        for field, value in (config or {}).items():
+            parts = [str(p).strip() for p in (value if isinstance(value, (list, tuple)) else [value])]
+            try:
+                if len(parts) not in (2, 3):
+                    raise ValueError('expected min, max or min, max, unit')
+                low, high = (None if p.lower() in ('', 'none') else float(p) for p in parts[:2])
+                unit = parts[2] if len(parts) == 3 else None
+                if unit is not None and unit not in self.known_units():
+                    raise ValueError(f"unknown unit '{unit}'")
+                if low is not None and high is not None and low > high:
+                    raise ValueError('min is above max')
+            except ValueError as e:
+                log.error("%slimits: ignoring '%s = %s': %s", label, field, ', '.join(parts), e)
+                continue
+            self.limits[field] = (low, high, unit)
+        if self.limits:
+            log.info('%s     limits apply to: %s', label, ', '.join(
+                f"{f} {'' if lo is None else lo} to {'' if hi is None else hi}{f' {u}' if u else ''}".replace('  ', ' ')
+                for f, (lo, hi, u) in sorted(self.limits.items())))
+
+    def __bool__(self):
+        return bool(self.limits)
+
+    @staticmethod
+    def known_units():
+        units = set(weewx.units.conversionDict)
+        for targets in weewx.units.conversionDict.values():
+            units.update(targets)
+        for system in (weewx.units.USUnits, weewx.units.MetricUnits, weewx.units.MetricWXUnits):
+            units.update(system.values())
+        return units
+
+    def apply(self, packet):
+        """Set each field of packet that is outside its limits to None."""
+        for field, (low, high, unit) in self.limits.items():
+            value = packet.get(field)
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                continue
+            if unit is not None:
+                try:
+                    vt = weewx.units.as_value_tuple(packet, field)
+                    value = value if vt.unit == unit else weewx.units.convert(vt, unit).value
+                except (KeyError, ValueError, TypeError) as e:
+                    if field not in self.reported:
+                        log.error('%slimits: cannot compare %s in %s: %s', self.label, field, unit, e)
+                        self.reported.add(field)
+                    continue
+            if (low is not None and value < low) or (high is not None and value > high):
+                if field not in self.reported or weewx.debug > 0:
+                    log.info('%slimits: %s %s is outside %s to %s%s, dropped%s', self.label, field, packet[field],
+                             low, high, f' {unit}' if unit else '',
+                             '' if weewx.debug > 0 else ' (further readings outside the limits are logged '
+                                                        'when debug is set)')
+                    self.reported.add(field)
+                packet[field] = None
+
+
+def no_signal_keys(data):
+    """{(model, channel): [data keys]} for multi-channel sensors that are paired but report signal 0.
+
+    The keys are the sensor's readings (ch_aisle.N.*, ch_soil.N.* ...), not its signal, battery or ID."""
+    found = {}
+    for model, (count, _) in SENSOR_GROUPS.items():
+        for channel in range(1, count + 1):
+            if data.get(f'{model}.ch{channel}.signal') != 0:
+                continue
+            keys = [k for k in channel_keys(model, channel) if not k.startswith(f'{model}.ch')]
+            found[(model, channel)] = [d for d in data if any(d.startswith(k) if k.endswith('.') else d == k
+                                                              for k in keys)]
+    return found
+
+
+# ---------------------------------------------------------------------------
+# Several gateways
+#
+# The priority merge, counter arbitration, outage restart and history aggregation below follow the
+# design of weewx-ecowitt-multi by mKainzbauer (https://github.com/mKainzbauer/weewx-ecowitt-multi,
+# GPL-3.0-or-later, merge.py, cumulative.py, gap.py and history/aggregate.py), re-implemented here on
+# top of GatewaySource.
+# ---------------------------------------------------------------------------
+
+# keys of the driver's section that are not inherited by the gateways listed in [[sources]]
+NOT_INHERITED = ('sources', 'priority', 'source_priority', 'sensor_map', 'gap_mode', 'max_gap_wait',
+                 'min_restart_interval', 'loop_json', 'mqtt')
+HISTORY_ALIASES = {'auto': 'either', 'sd': 'device', 'cloud': 'net', 'none': 'none'}
+
+
+def as_names(value):
+    """A list of names from a config value: a list, or a comma separated string."""
+    if value is None:
+        return []
+    items = value if isinstance(value, (list, tuple)) else str(value).split(',')
+    return [str(v).strip() for v in items if str(v).strip()]
+
+
+def _source_config(base, name, own):
+    """The config of gateway name: the driver's section with the gateway's own settings on top."""
+    config = {k: (dict(v) if hasattr(v, 'keys') else v) for k, v in base.items() if k not in NOT_INHERITED}
+    for key, value in own.items():
+        if hasattr(value, 'keys') and hasattr(config.get(key), 'keys'):
+            config[key] = {**config[key], **value}
+        else:
+            config[key] = dict(value) if hasattr(value, 'keys') else value
+    # names used by weewx-ecowitt-multi
+    if 'host' in own and 'ip_address' not in own:
+        host, port = str(own['host']), own.get('port')
+        config['ip_address'] = f'{host}:{port}' if port and ':' not in host else host
+    if 'history' in own:
+        config['catchup'] = {**config.get('catchup', {}),
+                             'source': HISTORY_ALIASES.get(str(own['history']).lower(), own['history'])}
+    if not config.get('ip_address') or config.get('ip_address') == 'replace_me':
+        raise weewx.ViolatedPrecondition(f"[[sources]] [[[{name}]]] needs an ip_address")
+    return config
+
+
+def source_configs(stn_dict):
+    """[(name, config)] for each gateway in the driver's section of weewx.conf, best first.
+
+    Without [[sources]] there is one gateway, called 'gateway', and its config is the section itself.
+    With [[sources]], each subsection is a gateway: it inherits the section's settings (except those in
+    NOT_INHERITED) and can override any of them. source_priority orders them; by default they are in
+    the order they are listed.
+    """
+    listed = stn_dict.get('sources') or {}
+    if not listed:
+        return [('gateway', stn_dict)]
+    order = as_names(stn_dict.get('source_priority'))
+    unknown = [n for n in order if n not in listed]
+    if unknown:
+        log.error('source_priority: ignoring %s, not in [[sources]]', ', '.join(unknown))
+    order = [n for n in order if n in listed] + [n for n in listed if n not in order]
+    configs = []
+    for name in order:
+        own = listed[name]
+        if str(own.get('enabled', 'True')).lower() in ('false', 'no', 'off', '0'):
+            log.info('gateway %s is disabled', name)
+            continue
+        configs.append((name, _source_config(stn_dict, name, own)))
+    if not configs:
+        raise weewx.ViolatedPrecondition('[[sources]]: every gateway is disabled')
+    addresses = [c['ip_address'] for _, c in configs]
+    if len(set(addresses)) < len(addresses):
+        log.warning('[[sources]]: two gateways have the same ip_address')
+    return configs
+
+
+class SourcePriority:
+    """The order in which gateways are asked for a field: [[priority]] (exact field names, or a prefix
+    ending in '*') and otherwise the gateways' own order."""
+
+    def __init__(self, names, overrides=None):
+        self.names = list(names)
+        self.exact, self.prefixes = {}, []
+        for key, value in (overrides or {}).items():
+            listed = as_names(value)
+            unknown = [n for n in listed if n not in self.names]
+            if unknown:
+                log.error('[[priority]] %s: ignoring %s, not in [[sources]]', key, ', '.join(unknown))
+            order = [n for n in listed if n in self.names]
+            order += [n for n in self.names if n not in order]
+            if key.endswith('*'):
+                self.prefixes.append((key[:-1], order))
+            else:
+                self.exact[key] = order
+        self.prefixes.sort(key=lambda p: -len(p[0]))     # the longest prefix wins
+
+    def order(self, field):
+        if field in self.exact:
+            return self.exact[field]
+        for prefix, order in self.prefixes:
+            if field.startswith(prefix):
+                return order
+        return self.names
+
+
+class CounterArbiter:
+    """Takes rain and lightning deltas from several gateways without counting any of it twice.
+
+    Each gateway's delta covers the time since its previous total. A field is counted from one gateway
+    (its provider) at a time. Another gateway's delta is only used if it doesn't overlap what has been
+    counted already, and that gateway either comes first for the field or the provider has gone quiet
+    for stale_after seconds. Deltas that don't overlap but arrive while the provider might still come
+    back are held, and added when the other gateway takes over, so no rain is lost while waiting.
+    """
+
+    def __init__(self, priority, stale_after=60):
+        self.priority, self.stale_after = priority, stale_after
+        self.last_ts = {}          # (gateway, field) -> time of the gateway's previous total
+        self.provider = {}         # field -> gateway
+        self.covered_until = {}    # field -> time up to which the field has been counted
+        self.held = {}             # (gateway, field) -> deltas after covered_until, not counted yet
+
+    def _rank(self, field, name):
+        order = self.priority(field)
+        return order.index(name) if name in order else len(order)
+
+    def update(self, name, field, delta, ts):
+        """The delta to count for field from gateway name's report at ts (None: count nothing)."""
+        prev_ts = self.last_ts.get((name, field))
+        self.last_ts[(name, field)] = ts
+        if delta is None or prev_ts is None or ts <= prev_ts:
+            return None
+        provider, covered = self.provider.get(field), self.covered_until.get(field)
+        if provider is not None and provider != name:
+            no_overlap = covered is None or prev_ts >= covered
+            better = self._rank(field, name) < self._rank(field, provider)
+            stale = covered is None or ts - covered > self.stale_after
+            if not no_overlap:
+                self.held.pop((name, field), None)
+                return None
+            if not (better or stale):
+                self.held[(name, field)] = self.held.get((name, field), 0.0) + delta
+                return None
+            log.info('%s is now counted from gateway %s (was %s)', field, name, provider)
+            delta += self.held.pop((name, field), 0.0)
+        # anything other gateways held now overlaps what has been counted
+        for key in [k for k in self.held if k[1] == field and k[0] != name]:
+            del self.held[key]
+        self.provider[field], self.covered_until[field] = name, ts
+        return delta
+
+
+class GatewayMerger:
+    """Merges the loop packets of several gateways into one.
+
+    Each field comes from the first gateway in its priority order whose latest packet is at most
+    max_age seconds old and has a value for it (readings dropped by [[limits]] have none, so the next
+    gateway is used). Rain and lightning deltas go through a CounterArbiter.
+    """
+
+    COUNTERS = ('t_rain', 'p_rain', 'lightning_strike_count', 'lightningcount')
+    NOT_MERGED = COUNTERS + ('rain', 'hail', 'dateTime', 'usUnits', 'gateway_online')
+
+    def __init__(self, names, overrides=None, max_age=DEFAULT_MAX_AGE, rain_source='tipping', debug=None):
+        self.priority = SourcePriority(names, overrides)
+        self.max_age, self.rain_source = max_age, rain_source
+        self.debug = debug or DebugOptions()
+        self.arbiter = CounterArbiter(self.priority.order, stale_after=max_age)
+        self.cache = {}            # gateway -> (ts, packet)
+        self.pending = {}          # counted deltas not emitted yet
+        self.counted = set()       # counter fields that some gateway reports
+        self.provenance = {}
+
+    def add(self, name, packet, reported):
+        """A gateway's loop packet; reported is the set of counter fields whose totals it contained."""
+        ts = packet['dateTime']
+        for field in self.COUNTERS:
+            if field in reported:
+                self.counted.add(field)
+                delta = self.arbiter.update(name, field, packet.get(field), ts)
+                if delta is not None:
+                    self.pending[field] = self.pending.get(field, 0.0) + delta
+        self.cache[name] = (ts, {k: v for k, v in packet.items() if k not in self.NOT_MERGED})
+
+    def fresh(self, now):
+        return {n: p for n, (ts, p) in self.cache.items() if now - ts <= self.max_age}
+
+    def merged(self, now, unit_system=DEFAULT_UNIT_SYSTEM):
+        """The merged packet at time now, with the deltas counted since the previous one."""
+        fresh = self.fresh(now)
+        packet, provenance = {}, {}
+        for field in {f for p in fresh.values() for f in p}:
+            for name in self.priority.order(field):
+                value = fresh.get(name, {}).get(field)
+                if value is not None:
+                    packet[field], provenance[field] = value, name
+                    break
+        for field in self.COUNTERS:
+            if field in self.counted:
+                packet[field] = self.pending.pop(field, None)
+        if 't_rain' in packet or 'p_rain' in packet:
+            packet['hail'] = packet.get('p_rain')
+            packet['rain'] = packet.get('p_rain') if self.rain_source == 'piezo' else packet.get('t_rain')
+        self.provenance = provenance
+        if self.debug.merge:
+            log.info('merge: %s', ', '.join(f'{f}<{n}' for f, n in sorted(provenance.items())))
+        packet.update(dateTime=int(now + 0.5), usUnits=unit_system)
+        return packet
+
+
+# outage restart state; module level so that it survives the engine restarts it causes
+_LAST_GAP_RESTART = {'ts': None}
+
+
+class GapMonitor:
+    """After every gateway has been silent for longer than archive_interval, waits until they are all
+    back (or max_gap_wait has passed) without emitting loop packets, then asks for an engine restart so
+    that WeeWX's catchup fills the outage from the gateways' history (gap_mode = restart).
+
+    Loop packets are held back while waiting because the first archive record written after the outage
+    would stop the catchup from going back any further.
+    """
+
+    NORMAL, OUTAGE, RECOVERING = 'normal', 'outage', 'recovering'
+    EMIT, HOLD, RESTART = 'emit', 'hold', 'restart'
+
+    def __init__(self, archive_interval=300, mode='restart', max_gap_wait=3600, min_restart_interval=900,
+                 clock=time.time):
+        self.archive_interval, self.mode = archive_interval, mode
+        self.max_gap_wait, self.min_restart_interval = max_gap_wait, min_restart_interval
+        self.clock = clock
+        self.state, self.last_data, self.outage_start, self.recover_start = self.NORMAL, None, None, None
+        self.expected = set()      # gateways that were up before the outage
+
+    def update(self, now, seen, delivered, history_capable):
+        """What to do now. seen: {gateway: time of its last data}; delivered: gateways with new data now."""
+        latest = max((t for t in seen.values() if t is not None), default=None)
+        if self.state == self.NORMAL:
+            if latest is not None and now - latest > self.archive_interval:
+                self.state, self.outage_start = self.OUTAGE, latest
+                self.expected = {n for n, t in seen.items() if t is not None and latest - t <= self.archive_interval}
+                log.warning('no data from any gateway for %d seconds', now - latest)
+                return self.HOLD
+            return self.EMIT
+        if not delivered:
+            return self.HOLD
+        if self.state == self.OUTAGE:
+            self.state, self.recover_start = self.RECOVERING, now
+            log.info('gateways back after %d seconds: %s', now - self.outage_start, ', '.join(sorted(delivered)))
+        back = {n for n, t in seen.items() if t is not None and t >= self.recover_start}
+        if not (self.expected <= back or now - self.recover_start >= self.max_gap_wait):
+            return self.HOLD
+        return self._finish(now, back & set(history_capable))
+
+    def _finish(self, now, with_history):
+        gap = self.recover_start - self.outage_start
+        self.state, self.outage_start, self.recover_start = self.NORMAL, None, None
+        if self.mode != 'restart':
+            log.info('outage of %d seconds not filled (gap_mode = %s)', gap, self.mode)
+            return self.EMIT
+        if not with_history:
+            log.warning('outage of %d seconds cannot be filled: no gateway with history is back', gap)
+            return self.EMIT
+        last = _LAST_GAP_RESTART['ts']
+        if last is not None and now - last < self.min_restart_interval:
+            log.warning('outage of %d seconds not filled: the last restart was only %d seconds ago '
+                        '(min_restart_interval)', gap, now - last)
+            return self.EMIT
+        log.info('restarting the engine so that catchup fills the %d second outage from %s', gap,
+                 ', '.join(sorted(with_history)))
+        _LAST_GAP_RESTART['ts'] = now
+        return self.RESTART
+
+
+def aggregation(field):
+    """How a field's history values are combined into one archive record."""
+    if field in GatewayMerger.COUNTERS or field in ('rain', 'hail'):
+        return 'sum'
+    group = weewx.units.obs_group_dict.get(field)
+    if group == 'group_direction':
+        return 'vecdir'
+    if 'gust' in field.lower():
+        return 'max'
+    if group in ('group_time', 'group_count') or field.endswith(('Rain', '_piezo')) or field == 'lightning_num':
+        return 'last'
+    return 'avg'
+
+
+def _combine(how, values):
+    numbers = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    if not numbers:
+        return next((v for v in reversed(values) if v is not None), None)
+    if how == 'sum':
+        return sum(numbers)
+    if how == 'max':
+        return max(numbers)
+    if how == 'last':
+        return numbers[-1]
+    if how == 'vecdir':
+        x = sum(math.sin(math.radians(v)) for v in numbers)
+        y = sum(math.cos(math.radians(v)) for v in numbers)
+        return None if abs(x) < 1e-9 and abs(y) < 1e-9 else round(math.degrees(math.atan2(x, y)) % 360.0, 1)
+    return sum(numbers) / len(numbers)
+
+
+def aggregate_records(records, interval):
+    """{end: record}: records combined into archive intervals (end - interval, end], interval in seconds."""
+    buckets = {}
+    for rec in records:
+        end = int(math.ceil(rec['dateTime'] / interval) * interval)
+        buckets.setdefault(end, []).append(rec)
+    result = {}
+    for end, recs in buckets.items():
+        fields = {f for r in recs for f in r} - {'dateTime', 'usUnits', 'interval'}
+        result[end] = {f: _combine(aggregation(f), [r.get(f) for r in recs]) for f in fields}
+    return result
+
+
+def merge_history(per_source, priority, interval, rain_source, start_ts, stop_ts, unit_system=DEFAULT_UNIT_SYSTEM):
+    """Archive records from {gateway: {end: record}}: each field from the first gateway with a value,
+    and all rain and lightning counts of an interval from one gateway."""
+    records = []
+    for end in sorted({e for b in per_source.values() for e in b if start_ts < e <= stop_ts}):
+        have = {n: b[end] for n, b in per_source.items() if end in b}
+        rec = {}
+        for field in {f for r in have.values() for f in r} - set(GatewayMerger.NOT_MERGED):
+            for name in priority.order(field):
+                if have.get(name, {}).get(field) is not None:
+                    rec[field] = have[name][field]
+                    break
+        counted = next((n for n in priority.order('t_rain') if any(have.get(n, {}).get(c) is not None
+                                                                   for c in GatewayMerger.COUNTERS)), None)
+        for field in GatewayMerger.COUNTERS:
+            if counted is not None and field in have[counted]:
+                rec[field] = have[counted][field]
+        if 't_rain' in rec or 'p_rain' in rec:
+            rec['hail'] = rec.get('p_rain')
+            rec['rain'] = rec.get('p_rain') if rain_source == 'piezo' else rec.get('t_rain')
+        rec.update(dateTime=end, usUnits=unit_system, interval=interval // 60)
+        records.append(rec)
+    return records
+
+
+RAIN_DELTA_FIELDS = ('t_rain', 'p_rain', 'hail', 'rain', 'lightning_strike_count', 'lightningcount')
+
+
+def add_deltas(total, packet):
+    """Add the rain and lightning deltas of packet into total (None + x = x)."""
+    for field in RAIN_DELTA_FIELDS:
+        value = packet.get(field)
+        if value is not None:
+            total[field] = value if total.get(field) is None else total[field] + value
+
+
+class SourceStatus:
+    """Whether a gateway is answering, and since when."""
+
+    def __init__(self):
+        self.online = None          # None until the first poll
+        self.last_seen = None       # time of the last good data
+        self.last_error = None
+        self.since = time.time()    # time online last changed
+
+    def good(self, ts=None):
+        """Record good data; True if the gateway was offline (or unknown) until now."""
+        changed = self.online is not True
+        if changed:
+            self.online, self.since = True, time.time()
+        self.last_seen, self.last_error = ts or time.time(), None
+        return changed
+
+    def failed(self, error):
+        """Record a failed poll; True if the gateway was online (or unknown) until now."""
+        changed = self.online is not False
+        if changed:
+            self.online, self.since = False, time.time()
+        self.last_error = str(error)
+        return changed
+
+
+class GatewaySource:
+    """Everything that belongs to one gateway: its connection and polling thread, sensor map, field
+    map, rain and lightning counters, catchup (history) source and online state.
+
+    It turns the gateway's data into packets of WeeWX fields in its own unit system. The driver and the
+    service use one per gateway; with several, a GatewayMerger combines their packets.
+    """
+
+    def __init__(self, name, config, unit_system=DEFAULT_UNIT_SYSTEM, debug=None, label=''):
         to_int, to_bool = weeutil.weeutil.to_int, weeutil.weeutil.tobool
-        max_tries = to_int(ec_config.get('max_tries', DEFAULT_MAX_TRIES))
-        retry_wait = to_int(ec_config.get('retry_wait', DEFAULT_RETRY_WAIT))
-        self.url_timeout = to_int(ec_config.get('url_timeout', DEFAULT_URL_TIMEOUT))
-        self.ip_address = ec_config.get('ip_address')
-        self.poll_interval = int(ec_config.get('poll_interval', DEFAULT_POLL_INTERVAL))
-        self.api_key = ec_config.get('api_key') or None
-        self.app_key = ec_config.get('app_key') or None
-        self.mac = ec_config.get('mac')
-        define_units()
-        log.info('     device IP address is %s', self.ip_address)
-        log.info('     poll interval is %d seconds', self.poll_interval)
+        self.name, self.config, self.unit_system = name, config, unit_system
+        self.label = label                       # log prefix, empty with a single gateway
+        self.debug = dbg = debug or DebugOptions(**config)
+        self.mapper = HttpMapper(driver_debug=dbg, **config)
+        max_tries = to_int(config.get('max_tries', DEFAULT_MAX_TRIES))
+        retry_wait = to_int(config.get('retry_wait', DEFAULT_RETRY_WAIT))
+        self.url_timeout = to_int(config.get('url_timeout', DEFAULT_URL_TIMEOUT))
+        self.ip_address = config.get('ip_address')
+        self.poll_interval = int(config.get('poll_interval', DEFAULT_POLL_INTERVAL))
+        self.api_key = config.get('api_key') or None
+        self.app_key = config.get('app_key') or None
+        catchup = config.get('catchup', {})
+        self.catchup_source = catchup.get('source')
+        self.catchup_grace = to_int(catchup.get('grace', DEFAULT_CATCHUP_GRACE))
+        self.catchup_retries = to_int(catchup.get('retries', DEFAULT_CATCHUP_RETRIES))
+        self.rain_source = str(config.get('rain_source', 'tipping')).lower()
+        if self.rain_source not in ('tipping', 'piezo', 'both'):
+            log.error("%sUnknown rain_source '%s', using 'tipping'", label, self.rain_source)
+            self.rain_source = 'tipping'
+        log.info('%s     device IP address is %s', label, self.ip_address)
+        log.info('%s     poll interval is %d seconds', label, self.poll_interval)
         if dbg.any or weewx.debug > 0:
-            log.info('     Max tries is %d URL retry wait is %d seconds', max_tries, retry_wait)
-            log.info('     URL timeout is %d seconds', self.url_timeout)
-        for group in dbg.debug_groups:
-            log.info('%9s debug is %s', group, 'set' if getattr(dbg, group) else 'not set')
+            log.info('%s     Max tries is %d URL retry wait is %d seconds', label, max_tries, retry_wait)
+            log.info('%s     URL timeout is %d seconds', label, self.url_timeout)
         log.info("   wn32_indoor: sensor ID decoding will use %s",
                  "indoor 'WN32'" if self.mapper.wn32_indoor else "'WH26'")
         log.info("  wn32_outdoor: sensor ID decoding will use %s",
@@ -1105,71 +1579,79 @@ class EcowittCommon:
         self.collector = EcowittHttpCollector(
             ip_address=self.ip_address, poll_interval=self.poll_interval, max_tries=max_tries,
             retry_wait=retry_wait, url_timeout=self.url_timeout, unit_system=unit_system,
-            show_battery=to_bool(ec_config.get('show_all_batt', DEFAULT_FILTER_BATTERY)),
-            get_soilad=to_bool(ec_config.get('get_soilad', DEFAULT_GET_SOILAD)),
-            log_unknown_fields=to_bool(ec_config.get('log_unknown_fields', False)),
-            fw_update_check_interval=int(ec_config.get('firmware_update_check_interval', DEFAULT_FW_CHECK_INTERVAL)),
-            sensor_map=ec_config.get('sensor_map'), api=ec_config.get('api', DEFAULT_API),
-            tcp_port=to_int(ec_config.get('tcp_port', DEFAULT_TCP_PORT)), debug=dbg,
-            log_next_update=to_bool(ec_config.get('log_next_update', DEFAULT_LOG_NEXT_UPDATE)))
-        self.rain, self.piezo, self.lightning = self._trackers()
+            show_battery=to_bool(config.get('show_all_batt', DEFAULT_FILTER_BATTERY)),
+            get_soilad=to_bool(config.get('get_soilad', DEFAULT_GET_SOILAD)),
+            log_unknown_fields=to_bool(config.get('log_unknown_fields', False)),
+            fw_update_check_interval=int(config.get('firmware_update_check_interval', DEFAULT_FW_CHECK_INTERVAL)),
+            sensor_map=config.get('sensor_map'), api=config.get('api', DEFAULT_API),
+            tcp_port=to_int(config.get('tcp_port', DEFAULT_TCP_PORT)), debug=dbg,
+            log_next_update=to_bool(config.get('log_next_update', DEFAULT_LOG_NEXT_UPDATE)))
+        self.rain, self.piezo, self.lightning = self.trackers(label)
+        self.status = SourceStatus()
+        self.offline_logged = False
+        self.reported = set()
         self.active_fields = set()
-        self.loop_json = LoopJsonWriter(ec_config.get('loop_json', {}), html_dir)
-        self.mqtt = MqttPublisher(ec_config.get('mqtt', {}))
+        self.limits = FieldLimits(config.get('limits'), label)
+        self.ignore_no_signal = to_bool(config.get('ignore_no_signal', False))
+        self.no_signal = set()
+        if self.ignore_no_signal:
+            log.info('%s     readings from multi-channel sensors with signal 0 will be ignored', label)
 
-    def _trackers(self, prefix=''):
-        return (DeltaTracker('rain', ('rain.0x13.val', 'rain.0x12.val'), self.driver_debug, prefix),
-                DeltaTracker('piezo rain', ('piezoRain.0x13.val', 'piezoRain.0x12.val'), self.driver_debug, prefix),
-                DeltaTracker('lightning', ('lightning.count',), self.driver_debug, prefix, 'lightning'))
+    def trackers(self, prefix=''):
+        return (DeltaTracker('rain', ('rain.0x13.val', 'rain.0x12.val'), self.debug, prefix),
+                DeltaTracker('piezo rain', ('piezoRain.0x13.val', 'piezoRain.0x12.val'), self.debug, prefix),
+                DeltaTracker('lightning', ('lightning.count',), self.debug, prefix, 'lightning'))
+
+    # -- the gateway ---------------------------------------------------------
+
+    @property
+    def device(self):
+        return self.collector.device
 
     @property
     def model(self):
         return self.collector.device.model
 
-    def export(self, packet):
-        """Send a finished loop packet to the optional JSON file and MQTT broker."""
-        self.loop_json.write(packet)
-        self.mqtt.publish(packet)
+    @property
+    def mac_address(self):
+        return self.collector.device.mac_address
 
-    def log_subset(self, data, label=None):
-        """Log the rain and/or wind fields in data as per debug settings."""
-        for enabled, fmap, what in ((self.driver_debug.rain, self.mapper.rain_map, 'rain'),
-                                    (self.driver_debug.wind, self.mapper.wind_map, 'wind')):
-            if not enabled:
-                continue
-            msgs = [f'{w}={data[w]}' for w in fmap if w in data]
-            msgs += [f'{g}={data[g]}' for w, g in fmap.items() if g in data and g != w]
-            prefix = f'{label}: ' if label else ''
-            log.info('%s%s', prefix, ' '.join(msgs) if msgs else f'no {what} data found')
+    def start(self):
+        self.collector.startup()
 
-    def log_data(self, label, data, loop_debug=None):
-        """Log a full data dict (loop debug) or just its rain/wind subsets."""
-        if self.driver_debug.loop if loop_debug is None else loop_debug:
-            ts = data.get('dateTime', data.get('datetime'))
-            ts_str = f'{timestamp_to_string(ts)} ' if ts is not None else ''
-            log_dict(f'{label}: {ts_str}', data)
-        else:
-            self.log_subset(data, label)
+    def stop(self):
+        self.collector.shutdown()
+
+    def get(self, timeout):
+        """The next item from the polling thread: a data dict, an exception, or None (shut down).
+        Raises queue.Empty after timeout seconds. Keeps the online status up to date."""
+        item = self.collector.queue.get(True, timeout)
+        if hasattr(item, 'keys'):
+            self.status.good(item.get('datetime'))
+        elif isinstance(item, BaseException):
+            self.status.failed(item)
+        return item
+
+    # -- live data -----------------------------------------------------------
 
     def log_active_map(self, data):
         """Log the part of the field map the device is reporting: in full after the first poll, then
         any fields that appear later (a sensor added or coming back into range). Debug only."""
-        if not (self.driver_debug.any or weewx.debug > 0):
+        if not (self.debug.any or weewx.debug > 0):
             return
-        active = {w: s for w, s in self.mapper.field_map.items() if s in data and w not in self.active_fields}
+        field_map = self.mapper.field_map
+        active = {w: s for w, s in field_map.items() if s in data and w not in self.active_fields}
         if not active:
             return
         if self.active_fields:
-            log_dict(f'     {len(active)} more field(s) now reported: ', active)
+            log_dict(f'{self.label}     {len(active)} more field(s) now reported: ', active)
         else:
-            log_dict(f'     active field map ({len(active)} of {len(self.mapper.field_map)} entries) is ', active)
+            log_dict(f'{self.label}     active field map ({len(active)} of {len(field_map)} entries) is ', active)
         self.active_fields.update(active)
 
-    def process_live_data(self, data, packet, wbgt_us=False):
-        """Update the counters from live data and add derived fields to packet."""
-        self.log_active_map(data)
-        self.rain.update(data)
-        self.piezo.update(data)
+    def derived_fields(self, data, packet):
+        """Add fields worked out from data (not in the field map) to packet; replaces the lightning count
+        in data with its delta, so that the mapped lightning fields are per-packet counts."""
         if 'lightning.count' in data:
             packet['lightning_num'] = data['lightning.count']
             data['lightning.count'] = self.lightning.calc(data['lightning.count'])
@@ -1188,11 +1670,276 @@ class EcowittCommon:
         temp, hum = data.get('common_list.0x02.val'), data.get('common_list.0x07.val')
         if 'common_list.0xA2.val' not in data and temp is not None and hum is not None:
             twb = calc_twb(float(temp), float(hum))
-            packet['wbgt'] = twb * 1.8 + 32 if wbgt_us else twb
+            packet['wbgt'] = twb * 1.8 + 32 if self.unit_system == weewx.US else twb
+
+    def use_piezo_rate(self, data, packet):
+        """Take rainRate from the piezo gauge when rain_source = piezo."""
+        if self.rain_source == 'piezo' and 'piezoRain.0x0E.val' in data:
+            packet['rainRate'] = data['piezoRain.0x0E.val']
+
+    def loop_packet(self, data):
+        """A packet of WeeWX fields (in this gateway's unit system) from one poll's data, with the rain
+        and lightning counters advanced: t_rain/p_rain/hail/rain/lightning are deltas since the last poll."""
+        self.log_active_map(data)
+        if self.ignore_no_signal:
+            self.drop_no_signal(data)
+        # the counters whose totals are in this poll (a multi-gateway merge only counts these)
+        self.reported = {f for f, present in (('t_rain', (self.rain.field or 'rain.0x13.val') in data or
+                                                          'rain.0x12.val' in data),
+                                              ('p_rain', (self.piezo.field or 'piezoRain.0x13.val') in data or
+                                                          'piezoRain.0x12.val' in data),
+                                              ('lightning_strike_count', 'lightning.count' in data),
+                                              ('lightningcount', 'lightning.count' in data)) if present}
+        packet = {'dateTime': data['datetime'] if 'datetime' in data else int(time.time() + 0.5),
+                  'usUnits': self.unit_system, 'gateway_online': 1}
+        self.rain.update(data)
+        self.piezo.update(data)
+        self.derived_fields(data, packet)
+        packet['t_rain'] = self.rain.delta
+        packet['hail'] = packet['p_rain'] = self.piezo.delta
+        packet['rain'] = self.piezo.delta if self.rain_source == 'piezo' else self.rain.delta
+        mapped = self.mapper.map_data(data)
+        packet.update(mapped)
+        self.use_piezo_rate(data, packet)
+        self.limits.apply(packet)
+        return packet, mapped
+
+    def drop_no_signal(self, data):
+        """Remove the readings of multi-channel sensors whose signal is 0 (ignore_no_signal)."""
+        found = no_signal_keys(data)
+        for model, channel in sorted(set(found) - self.no_signal):
+            log.info('%s%s CH%d has no signal: its readings are ignored until it is heard again',
+                     self.label, model.upper(), channel)
+        for model, channel in sorted(self.no_signal - set(found)):
+            log.info('%s%s CH%d has a signal again', self.label, model.upper(), channel)
+        self.no_signal = set(found)
+        for keys in found.values():
+            for key in keys:
+                del data[key]
+
+    # -- history (catchup) ---------------------------------------------------------
+
+    def catchup_factory(self):
+        source = (self.catchup_source or 'either').lower()
+        if source not in ('either', 'both', 'net', 'device'):
+            raise CatchupObjectError
+        if source != 'net' and self.collector.device.tcp:
+            log.info('Catchup: %s has no local HTTP API, so missed data can only come from Ecowitt.net',
+                     self.collector.device.model)
+            if source == 'device':
+                raise CatchupObjectError
+        elif source != 'net':
+            try:
+                return EcowittDeviceCatchup(ip_address=self.ip_address, unit_system=self.unit_system,
+                                            catchup_grace=self.catchup_grace, catchup_retries=self.catchup_retries,
+                                            url_timeout=self.url_timeout, driver_debug=self.debug)
+            except weewx.ViolatedPrecondition as e:
+                raise CatchupObjectError from e
+            except CatchupObjectError:
+                if source == 'device':
+                    raise
+        return EcowittNetCatchup(api_key=self.api_key, app_key=self.app_key, mac=self.mac_address,
+                                 driver_debug=self.debug)
+
+    def history(self, since_ts, archive_interval=None):
+        """Archive records (WeeWX fields, this gateway's unit system) for the time after since_ts.
+
+        archive_interval (seconds), if given, is checked against the records' own interval."""
+        try:
+            catchup_obj = self.catchup_factory()
+        except CatchupObjectError:
+            return
+        where = getattr(catchup_obj, 'source', None) or 'the SD card'
+        count = first = last = 0
+        for record in self._history(catchup_obj, since_ts):
+            if count == 0:
+                first = record['dateTime']
+                interval = record.get('interval')
+                if archive_interval and interval and interval * 60 != archive_interval:
+                    log.warning('%sCatchup: records from %s are every %s minutes, but archive_interval is %s '
+                                'minutes. They are saved with their own interval.', self.label, where, interval,
+                                archive_interval / 60)
+            count, last = count + 1, record['dateTime']
+            yield record
+        if count:
+            log.info('%sCatchup: %d record(s) from %s, %s to %s', self.label, count, where,
+                     timestamp_to_string(first), timestamp_to_string(last))
+
+    def _history(self, catchup_obj, since_ts):
+        mapper, sensors = self.collector.sensor_mapper, None
+        if mapper:
+            try:
+                sensors = self.collector.device.get_sensors_data()
+            except (DeviceIOError, InvalidApiResponseError) as e:
+                log.error('sensor_map: cannot read sensor IDs, catchup records are not remapped: %s', e)
+        array = self.collector.wind_array
+        if array is None:
+            try:
+                array = wind_array(sensors if sensors is not None else self.collector.device.get_sensors_data())
+            except (DeviceIOError, InvalidApiResponseError, ParseError):
+                array = 'ws80'
+        rain_a, piezo_a, lightning_a = self.trackers(f'{self.label}Archive: ')
+        for rec in catchup_obj.gen_history_records(start_ts=since_ts):
+            if sensors is not None:
+                rec = mapper.apply(rec, sensors)
+            record = {'dateTime': rec['datetime'], 'usUnits': self.unit_system, 'interval': rec['interval']}
+            rain, piezo = rain_a.update(rec), piezo_a.update(rec)
+            if 'lightning.count' in rec:
+                rec['lightning.count'] = lightning_a.calc(rec['lightning.count'])
+            if 'common_list.5.val' not in rec:
+                try:
+                    temp, hum = float(rec['common_list.0x02.val']), float(rec['common_list.0x07.val'])
+                    rec['common_list.5.val'] = round(0.61094 * math.exp(17.625 * temp / (temp + 243.04))
+                                                     * (1 - hum / 100), 2) * 10
+                except (KeyError, TypeError, ValueError, ZeroDivisionError, OverflowError):
+                    pass
+            rec['t_rain'] = rain
+            rec['hail'] = rec['p_rain'] = piezo
+            rec['rain'] = piezo if self.rain_source == 'piezo' else rain
+            route_wind_voltage(rec, array)
+            if 'piezoRain.0x13.voltage' in rec:
+                key = 'ws85' if 'ws85.version' in rec else 'ws90'
+                rec[f'{key}_batt'] = rec['piezoRain.0x13.voltage']
+                rec[f'{key}cap_volt'] = rec.get('piezocap_volt')
+            if self.debug.archive:
+                log.info('Archive rec data %s', rec)
+            record.update(self.mapper.map_data(rec))
+            self.use_piezo_rate(rec, record)
+            self.limits.apply(record)
+            yield record
+
+
+class EcowittCommon:
+    """Functionality shared by the driver and the service: the gateway sources and the exports."""
+
+    def __init__(self, unit_system=None, html_dir=None, **ec_config):
+        self.driver_debug = dbg = DebugOptions(**ec_config)
+        define_units()
+        for group in dbg.debug_groups:
+            log.info('%9s debug is %s', group, 'set' if getattr(dbg, group) else 'not set')
+        configs = source_configs(ec_config)
+        if len(configs) > 1:
+            log.info('gateways in priority order: %s', ', '.join(f"{n} ({c['ip_address']})" for n, c in configs))
+        self.sources = [GatewaySource(name, config, unit_system=unit_system, debug=dbg,
+                                      label=f'{name}: ' if len(configs) > 1 else '')
+                        for name, config in configs]
+        self.merger = None
+        if self.multi:
+            self.merger = GatewayMerger([s.name for s in self.sources], ec_config.get('priority'),
+                                        max_age=int(ec_config.get('max_age', DEFAULT_MAX_AGE)),
+                                        rain_source=str(ec_config.get('rain_source', 'tipping')).lower(), debug=dbg)
+            for field, order in sorted(self.merger.priority.exact.items()) + sorted(
+                    (f'{p}*', o) for p, o in self.merger.priority.prefixes):
+                log.info('     %s comes from %s', field, ', '.join(order))
+        self.loop_json = LoopJsonWriter(ec_config.get('loop_json', {}), html_dir)
+        self.mqtt = MqttPublisher(ec_config.get('mqtt', {}))
+
+    @property
+    def multi(self):
+        """Whether there is more than one gateway ([[sources]])."""
+        return len(self.sources) > 1
+
+    def drain_sources(self, label):
+        """Feed everything the gateways' polling threads have queued into the merger.
+
+        Returns the names of the gateways that delivered data; raises DeviceIOError if a collector shut
+        down. A gateway that stops answering is logged and skipped: the others carry on."""
+        delivered = set()
+        for source in self.sources:
+            while True:
+                try:
+                    item = source.get(0)
+                except queue.Empty:
+                    break
+                if hasattr(item, 'keys'):
+                    if source.offline_logged:
+                        log.info('%s: %s is answering again', label, source.name)
+                        source.offline_logged = False
+                    self.log_data(f'{label}: {source.name} received {source.model} data', item)
+                    packet, mapped = source.loop_packet(item)
+                    self.log_data(f'{label}: {source.name} mapped data', mapped)
+                    self.merger.add(source.name, packet, source.reported)
+                    delivered.add(source.name)
+                elif isinstance(item, DeviceIOError):
+                    if not source.offline_logged:
+                        log.warning('%s: %s is not answering: %s', label, source.name, item)
+                        source.offline_logged = True
+                elif isinstance(item, BaseException):
+                    log.error('%s: %s: unexpected exception %s: %s', label, source.name, item.__class__.__name__,
+                              item)
+                elif item is None:
+                    raise DeviceIOError(f'the collector for {source.name} has shut down')
+        return delivered
+
+    def online_fields(self, now, max_age):
+        """gateway_online (any gateway answering within max_age) and, with several gateways,
+        gateway_online_<name> for each."""
+        fields = {}
+        for source in self.sources:
+            seen = source.status.last_seen
+            fields[f'gateway_online_{source.name}'] = int(bool(source.status.online and seen
+                                                               and now - seen <= max_age))
+        fields['gateway_online'] = int(any(fields.values()))
+        return fields if self.multi else {'gateway_online': fields['gateway_online']}
+
+    # the single gateway, for the command line tools and anything that predates GatewaySource
+    @property
+    def source(self):
+        return self.sources[0]
+
+    @property
+    def collector(self):
+        return self.source.collector
+
+    @property
+    def mapper(self):
+        return self.source.mapper
+
+    @property
+    def ip_address(self):
+        return self.source.ip_address
+
+    @property
+    def model(self):
+        return self.source.model
+
+    def export(self, packet):
+        """Send a finished loop packet to the optional JSON file and MQTT broker."""
+        self.loop_json.write(packet)
+        self.mqtt.publish(packet)
+
+    def log_subset(self, data, label=None, mapper=None):
+        """Log the rain and/or wind fields in data as per debug settings."""
+        mapper = mapper or self.mapper
+        for enabled, fmap, what in ((self.driver_debug.rain, mapper.rain_map, 'rain'),
+                                    (self.driver_debug.wind, mapper.wind_map, 'wind')):
+            if not enabled:
+                continue
+            msgs = [f'{w}={data[w]}' for w in fmap if w in data]
+            msgs += [f'{g}={data[g]}' for w, g in fmap.items() if g in data and g != w]
+            prefix = f'{label}: ' if label else ''
+            log.info('%s%s', prefix, ' '.join(msgs) if msgs else f'no {what} data found')
+
+    def log_data(self, label, data, loop_debug=None):
+        """Log a full data dict (loop debug) or just its rain/wind subsets."""
+        if self.driver_debug.loop if loop_debug is None else loop_debug:
+            ts = data.get('dateTime', data.get('datetime'))
+            ts_str = f'{timestamp_to_string(ts)} ' if ts is not None else ''
+            log_dict(f'{label}: {ts_str}', data)
+        else:
+            self.log_subset(data, label)
+
+    def stop_sources(self):
+        for source in self.sources:
+            source.stop()
+        self.mqtt.close()
 
 
 class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
     """WeeWX service that augments loop packets with Ecowitt device data."""
+
+    # fields of the gateway packet that the service never adds: the main driver supplies these
+    main_driver_fields = ('dateTime', 'usUnits', 'rain', 'hail', 'gateway_online')
 
     def __init__(self, engine, config_dict):
         svc_config = config_dict.get('EcowittHttpService') or driver_config(config_dict)
@@ -1213,22 +1960,27 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
         self.log_failures = True
         self.lost_con_ts = None
         self.latest_sensor_data = None
-        self.collector.startup()
+        for source in self.sources:
+            source.start()
         self.bind(weewx.NEW_LOOP_PACKET, self.new_loop_packet)
 
     def new_loop_packet(self, event):
+        if self.multi:
+            self.new_loop_packet_merged(event)
+            return
         dbg = self.driver_debug
         verbose = dbg.loop or dbg.rain or dbg.wind
         packet = event.packet
         if verbose:
             log_dict(f"EcowittHttpService: Processing loop packet: {timestamp_to_string(packet['dateTime'])} ",
                      packet)
+        latest, deltas = None, {}
         self.latest_sensor_data = None
         while True:
             try:
-                data = self.collector.queue.get(True, 0.5)
+                data = self.source.get(0.5)
             except queue.Empty:
-                if self.latest_sensor_data is None and verbose:
+                if latest is None and verbose:
                     log.info('EcowittHttpService: No queued items to process')
                 if self.lost_con_ts is not None and time.time() > self.lost_con_ts + self.lost_contact_log_period:
                     self.lost_con_ts = time.time()
@@ -1237,35 +1989,65 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
             if hasattr(data, 'keys'):
                 self.lost_con_ts = None
                 self.set_failure_logging(True)
-                self.process_live_data(data, packet, wbgt_us=packet.get('usUnits') == weewx.US)
-                packet['t_rain'] = self.rain.delta
-                packet['p_rain'] = self.piezo.delta
                 self.log_data(f'EcowittHttpService: newLoop Received {self.model} data', data)
-                self.process_queued_sensor_data(data, packet['dateTime'])
+                gw_packet, mapped = self.source.loop_packet(data)
+                add_deltas(deltas, gw_packet)       # every poll's rain counts, not only the latest one's
+                if self.is_fresh(data, packet['dateTime']):
+                    latest = gw_packet
+                    self.latest_sensor_data = dict(data)
+                    self.log_data(f'EcowittHttpService: newLoop Mapped {self.model} data', mapped)
             elif isinstance(data, BaseException):
                 self.process_queued_exception(data)
             elif data is None:
                 if dbg.loop:
                     log.info('EcowittHttpService: Received collector shutdown signal')
                 self.shutDown()
-        if self.latest_sensor_data is not None:
-            mapped = self.mapper.map_data(self.latest_sensor_data)
-            mapped['usUnits'] = self.unit_system
-            self.log_data(f'EcowittHttpService: newLoop Mapped {self.model} data', mapped)
-            self.augment_packet(packet, mapped)
+        status = self.source.status
+        packet['gateway_online'] = int(bool(status.online and status.last_seen
+                                            and status.last_seen > packet['dateTime'] - self.max_age))
+        if deltas:
+            gw_deltas = {'usUnits': self.unit_system, **{k: v for k, v in deltas.items() if k in ('t_rain', 'p_rain')}}
+            converted = weewx.units.StdUnitConverters[packet['usUnits']].convertDict(gw_deltas)
+            packet.update({k: v for k, v in converted.items() if k != 'usUnits'})
+        if latest is not None:
+            latest.update({k: deltas.get(k) for k in ('lightning_strike_count', 'lightningcount') if k in latest})
+            self.augment_packet(packet, {k: v for k, v in latest.items()
+                                         if k not in self.main_driver_fields + ('t_rain', 'p_rain')},
+                                latest['usUnits'])
             self.export(packet)
             self.log_data('EcowittHttpService: newLoop Augmented packet', packet, dbg.loop or weewx.debug >= 2)
 
-    def process_queued_sensor_data(self, sensor_data, date_time):
+    def new_loop_packet_merged(self, event):
+        """Add the merged data of several gateways to the main driver's loop packet."""
+        packet = event.packet
+        try:
+            self.drain_sources('EcowittHttpService')
+        except DeviceIOError as e:
+            log.error('EcowittHttpService: %s', e)
+        merged = self.merger.merged(packet['dateTime'], self.unit_system)
+        counts = {k: merged[k] for k in ('t_rain', 'p_rain') if merged.get(k) is not None}
+        if counts:
+            converted = weewx.units.StdUnitConverters[packet['usUnits']].convertDict(
+                {'usUnits': self.unit_system, **counts})
+            packet.update({k: v for k, v in converted.items() if k != 'usUnits'})
+        others = {k: v for k, v in merged.items() if k not in self.main_driver_fields + ('t_rain', 'p_rain')}
+        if len(others) > 0:
+            self.augment_packet(packet, others, self.unit_system)
+        packet.update(self.online_fields(packet['dateTime'], self.max_age))
+        self.export(packet)
+        self.log_data('EcowittHttpService: newLoop Augmented packet', packet, self.driver_debug.loop or weewx.debug >= 2)
+
+    def is_fresh(self, sensor_data, date_time):
         ts = sensor_data.get('datetime')
         if ts is None:
             if self.driver_debug.loop or weewx.debug >= 2:
                 log.info('EcowittHttpService: Discarded non-timestamped packet')
-        elif ts > date_time - self.max_age:
-            if self.latest_sensor_data is None or ts > self.latest_sensor_data['datetime']:
-                self.latest_sensor_data = dict(sensor_data)
-        elif self.driver_debug.loop or weewx.debug >= 2:
+            return False
+        if ts > date_time - self.max_age:
+            return True
+        if self.driver_debug.loop or weewx.debug >= 2:
             log.info('EcowittHttpService: Discarded packet with timestamp %s', timestamp_to_string(ts))
+        return False
 
     def process_queued_exception(self, e):
         if isinstance(e, DeviceIOError):
@@ -1275,23 +2057,31 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
         else:
             log.error('EcowittHttpService: Caught unexpected exception %s: %s', e.__class__.__name__, e)
 
-    def augment_packet(self, packet, data):
+    def augment_packet(self, packet, data, unit_system=None):
+        data = dict(data, usUnits=unit_system or self.unit_system)
         converted = weewx.units.StdUnitConverters[packet['usUnits']].convertDict(data)
+        converted.pop('usUnits', None)
         if self.driver_debug.loop:
             log_dict(f'EcowittHttpService: Converted {self.model} data: ', converted)
         for field, value in converted.items():
             packet.setdefault(field, value)
 
     def set_failure_logging(self, log_failures):
-        self.log_failures = self.collector.log_failures = self.collector.device.log_failures = log_failures
+        collector = self.collector
+        self.log_failures = collector.log_failures = collector.device.log_failures = log_failures
 
     def shutDown(self):
-        self.collector.shutdown()
-        self.mqtt.close()
+        self.stop_sources()
+
+
+def std_archive_interval(config_dict):
+    """[StdArchive] archive_interval in seconds (300 if not set)."""
+    return weeutil.weeutil.to_int(config_dict.get('StdArchive', {}).get('archive_interval', 300))
 
 
 def loader(config_dict, engine):
-    return EcowittHttpDriver(html_dir=html_root(config_dict), **driver_config(config_dict))
+    return EcowittHttpDriver(html_dir=html_root(config_dict), archive_interval=std_archive_interval(config_dict),
+                             **driver_config(config_dict))
 
 
 def configurator_loader(config_dict):
@@ -1305,47 +2095,46 @@ def confeditor_loader():
 class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
     """WeeWX driver for Ecowitt devices using the local HTTP API."""
 
-    def __init__(self, html_dir=None, **stn_dict):
+    def __init__(self, html_dir=None, archive_interval=None, **stn_dict):
         log.info('EcowittHttpDriver: version is %s', DRIVER_VERSION)
+        self.std_archive_interval = archive_interval   # [StdArchive] archive_interval (seconds)
+        to_int = weeutil.weeutil.to_int
+        self.gap_mode = str(stn_dict.get('gap_mode', 'restart')).lower()
+        self.max_gap_wait = to_int(stn_dict.get('max_gap_wait', 3600))
+        self.min_restart_interval = to_int(stn_dict.get('min_restart_interval', 900))
         self.unit_system = DEFAULT_UNIT_SYSTEM
         log.info('unit_system: %s', self.unit_system)
         try:
             EcowittCommon.__init__(self, unit_system=self.unit_system, html_dir=html_dir, **stn_dict)
         except weewx.ViolatedPrecondition as e:
             raise weewx.engine.InitializationError from e
-        catchup = stn_dict.get('catchup', {})
-        self.catchup_source = catchup.get('source')
-        log.info('catchup source: %s', self.catchup_source)
-        self.catchup_grace = weeutil.weeutil.to_int(catchup.get('grace', DEFAULT_CATCHUP_GRACE))
-        self.catchup_retries = weeutil.weeutil.to_int(catchup.get('retries', DEFAULT_CATCHUP_RETRIES))
-        self.rain_source = str(stn_dict.get('rain_source', 'tipping')).lower()
-        if self.rain_source not in ('tipping', 'piezo', 'both'):
-            log.error("Unknown rain_source '%s', using 'tipping'", self.rain_source)
-            self.rain_source = 'tipping'
-        log.info("WeeWX 'rain' and 'rainRate' are taken from the %s gauge%s",
-                 'piezo' if self.rain_source == 'piezo' else 'tipping',
-                 "; the piezo gauge is recorded in 'p_rain'/'hail'" if self.rain_source == 'both' else '')
-        self.rain_a, self.piezo_a, self.lightning_a = self._trackers('Archive: ')
-        self.collector.startup()
+        for source in self.sources:
+            log.info('%scatchup source: %s', source.label, source.catchup_source)
+            log.info("%sWeeWX 'rain' and 'rainRate' are taken from the %s gauge%s", source.label,
+                     'piezo' if source.rain_source == 'piezo' else 'tipping',
+                     "; the piezo gauge is recorded in 'p_rain'/'hail'" if source.rain_source == 'both' else '')
+            source.start()
+        if self.multi:
+            log.info('outages of every gateway: gap_mode = %s (max_gap_wait %d s, min_restart_interval %d s)',
+                     self.gap_mode, self.max_gap_wait, self.min_restart_interval)
+
+    @property
+    def rain_source(self):
+        return self.source.rain_source
 
     def genLoopPackets(self):
+        if self.multi:
+            yield from self.gen_merged_loop_packets()
+            return
         while True:
             try:
-                data = self.collector.queue.get(True, 10)
+                data = self.source.get(10)
             except queue.Empty:
                 continue
             if hasattr(data, 'keys'):
                 self.log_data(f'EcowittHttpDriver: Loop Received {self.model} data', data)
-                packet = {'dateTime': data['datetime'] if 'datetime' in data else int(time.time() + 0.5),
-                          'usUnits': self.unit_system}
-                self.process_live_data(data, packet)
-                packet['t_rain'] = self.rain.delta
-                packet['hail'] = packet['p_rain'] = self.piezo.delta
-                packet['rain'] = self.piezo.delta if self.rain_source == 'piezo' else self.rain.delta
-                mapped = self.mapper.map_data(data)
+                packet, mapped = self.source.loop_packet(data)
                 self.log_data(f'EcowittHttpDriver: Loop Mapped {self.model} data', mapped)
-                packet.update(mapped)
-                self.use_piezo_rate(data, packet)
                 self.log_data('EcowittHttpDriver: Loop Packet', packet, self.driver_debug.loop or weewx.debug >= 2)
                 self.export(packet)
                 yield packet
@@ -1360,95 +2149,76 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
                 self.closePort()
                 raise DeviceIOError('EcowittHttpCollector needs to shutdown')
 
+    def gen_merged_loop_packets(self):
+        """Loop packets merged from several gateways. One gateway not answering doesn't stop them; after
+        a total outage, gap_mode decides whether the engine is restarted to fill it."""
+        gap = GapMonitor(self.std_archive_interval or 300, self.gap_mode, self.max_gap_wait,
+                         self.min_restart_interval)
+        history = {s.name for s in self.sources if (s.catchup_source or 'either').lower() != 'none'}
+        while True:
+            delivered = self.drain_sources('EcowittHttpDriver')
+            now = time.time()
+            action = gap.update(now, {s.name: s.status.last_seen for s in self.sources}, delivered, history)
+            if action == GapMonitor.RESTART:
+                raise weewx.WeeWxIOError('restarting so that catchup fills the outage')
+            if action == GapMonitor.HOLD:
+                self.merger.pending.clear()
+            elif delivered:
+                packet = self.merger.merged(now, self.unit_system)
+                packet.update(self.online_fields(now, self.merger.max_age))
+                self.log_data('EcowittHttpDriver: Loop Packet', packet, self.driver_debug.loop or weewx.debug >= 2)
+                self.export(packet)
+                yield packet
+                continue
+            time.sleep(0.5)
+
     def genStartupRecords(self, last_ts):
         return self.genArchiveRecords(last_ts)
 
+    def gen_merged_archive_records(self, lastgood_ts):
+        """Catchup with several gateways: each gateway's history, in archive_interval records, merged by
+        priority. Records are only made for intervals after lastgood_ts."""
+        interval = self.std_archive_interval or 300
+        if lastgood_ts is None:
+            log.info('Catchup: the database is empty, so there is nothing to catch up')
+            return
+        now = time.time()
+        per_source = {}
+        for source in self.sources:
+            try:
+                records = list(source.history(since_ts=lastgood_ts - interval))
+            except (DeviceIOError, OSError, InvalidApiResponseError) as e:
+                log.error('%sgenArchiveRecords: History access error: %s', source.label, e)
+                continue
+            if records:
+                per_source[source.name] = aggregate_records(records, interval)
+        records = merge_history(per_source, self.merger.priority, interval, self.merger.rain_source,
+                                lastgood_ts or 0, now, self.unit_system)
+        if per_source:
+            log.info('Catchup: %d merged %d-minute record(s) from %s', len(records), interval // 60,
+                     ', '.join(sorted(per_source)))
+        for rec in records:
+            if self.driver_debug.catchup:
+                log.info('genArchiveRecords: Yielding archive record %s', timestamp_to_string(rec['dateTime']))
+            yield rec
+
     def genArchiveRecords(self, lastgood_ts):
+        if self.multi:
+            yield from self.gen_merged_archive_records(lastgood_ts)
+            return
         if self.driver_debug.archive or self.driver_debug.catchup:
             log.info('genArchiveRecords: Using MAC address: %s', self.mac_address)
         try:
-            for rec in self.gen_ecowitt_archive_records(since_ts=lastgood_ts):
+            for rec in self.source.history(since_ts=lastgood_ts, archive_interval=self.std_archive_interval):
                 if self.driver_debug.catchup:
                     log.info('genArchiveRecords: Yielding archive record %s', timestamp_to_string(rec['dateTime']))
                 yield rec
         except (DeviceIOError, OSError, InvalidApiResponseError) as e:
             log.error('genArchiveRecords: History access error: %s', e)
 
-    def gen_ecowitt_archive_records(self, since_ts):
-        try:
-            catchup_obj = self.catchup_factory()
-        except CatchupObjectError:
-            return
-        mapper, sensors = self.collector.sensor_mapper, None
-        if mapper:
-            try:
-                sensors = self.collector.device.get_sensors_data()
-            except (DeviceIOError, InvalidApiResponseError) as e:
-                log.error('sensor_map: cannot read sensor IDs, catchup records are not remapped: %s', e)
-        array = self.collector.wind_array
-        if array is None:
-            try:
-                array = wind_array(sensors if sensors is not None else self.collector.device.get_sensors_data())
-            except (DeviceIOError, InvalidApiResponseError, ParseError):
-                array = 'ws80'
-        for rec in catchup_obj.gen_history_records(start_ts=since_ts):
-            if sensors is not None:
-                rec = mapper.apply(rec, sensors)
-            record = {'dateTime': rec['datetime'], 'usUnits': self.unit_system, 'interval': rec['interval']}
-            rain, piezo = self.rain_a.update(rec), self.piezo_a.update(rec)
-            if 'lightning.count' in rec:
-                rec['lightning.count'] = self.lightning_a.calc(rec['lightning.count'])
-            if 'common_list.5.val' not in rec:
-                try:
-                    temp, hum = float(rec['common_list.0x02.val']), float(rec['common_list.0x07.val'])
-                    rec['common_list.5.val'] = round(0.61094 * math.exp(17.625 * temp / (temp + 243.04))
-                                                     * (1 - hum / 100), 2) * 10
-                except (KeyError, TypeError, ValueError, ZeroDivisionError, OverflowError):
-                    pass
-            rec['t_rain'] = rain
-            rec['hail'] = rec['p_rain'] = piezo
-            rec['rain'] = piezo if self.rain_source == 'piezo' else rain
-            route_wind_voltage(rec, array)
-            if 'piezoRain.0x13.voltage' in rec:
-                key = 'ws85' if 'ws85.version' in rec else 'ws90'
-                rec[f'{key}_batt'] = rec['piezoRain.0x13.voltage']
-                rec[f'{key}cap_volt'] = rec.get('piezocap_volt')
-            if self.driver_debug.archive:
-                log.info('Archive rec data %s', rec)
-            record.update(self.mapper.map_data(rec))
-            self.use_piezo_rate(rec, record)
-            yield record
-
-    def use_piezo_rate(self, data, packet):
-        """Take rainRate from the piezo gauge when rain_source = piezo."""
-        if self.rain_source == 'piezo' and 'piezoRain.0x0E.val' in data:
-            packet['rainRate'] = data['piezoRain.0x0E.val']
-
-    def catchup_factory(self):
-        source = (self.catchup_source or 'either').lower()
-        if source not in ('either', 'both', 'net', 'device'):
-            raise CatchupObjectError
-        if source != 'net' and self.collector.device.tcp:
-            log.info('Catchup: %s has no local HTTP API, so missed data can only come from Ecowitt.net',
-                     self.collector.device.model)
-            if source == 'device':
-                raise CatchupObjectError
-        elif source != 'net':
-            try:
-                return EcowittDeviceCatchup(ip_address=self.ip_address, unit_system=self.unit_system,
-                                            catchup_grace=self.catchup_grace, catchup_retries=self.catchup_retries,
-                                            url_timeout=self.url_timeout, driver_debug=self.driver_debug)
-            except weewx.ViolatedPrecondition as e:
-                raise CatchupObjectError from e
-            except CatchupObjectError:
-                if source == 'device':
-                    raise
-        return EcowittNetCatchup(api_key=self.api_key, app_key=self.app_key, mac=self.mac_address,
-                                 driver_debug=self.driver_debug)
-
     @property
     def hardware_name(self):
-        model = self.collector.device.model
+        model = self.source.device.model
         if model is not None:
             log.info('Station is : %s', model)
             return model
@@ -1456,11 +2226,10 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
 
     @property
     def mac_address(self):
-        return self.collector.device.mac_address
+        return self.source.mac_address
 
     def closePort(self):
-        self.collector.shutdown()
-        self.mqtt.close()
+        self.stop_sources()
 
 
 # ---------------------------------------------------------------------------
@@ -1523,9 +2292,25 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
         # whether to log 'Next update in N seconds' after each poll when debug
         # is set in weewx.conf
         log_next_update = True
+
+        # whether to ignore readings from multi-channel sensors while the
+        # gateway reports their signal as 0
+        ignore_no_signal = False
 """
 
+    # weectl calls prompt_for_settings() only when it may prompt, and before modify_config(). It calls
+    # them on two different instances, so the flag is kept on the class (weectl runs once per process).
+    prompting = False
+
+    def ask(self, prompt, default, options=None):
+        """Ask, or with 'weectl ... --no-prompt' (or no terminal) take the default without asking."""
+        if not (self.prompting and sys.stdin is not None and sys.stdin.isatty()):
+            return default
+        print()
+        return weecfg.prompt_with_options(prompt, default, options)
+
     def prompt_for_settings(self):
+        EcowittHttpDriverConfEditor.prompting = True
         print()
         ip_address = weecfg.prompt_with_options('Specify the device IP address, for example: 192.168.1.100.',
                                                 self.existing_options.get('ip_address'))
@@ -1549,21 +2334,18 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
     def _merge(config_dict, text):
         config_dict.merge(configobj.ConfigObj(io.StringIO(textwrap.dedent(text))))
 
-    @staticmethod
-    def do_loop_on_init(config_dict):
-        print()
+    def do_loop_on_init(self, config_dict):
         prompt = ("The Ecowitt HTTP driver requires a network connection to the device.\n"
                   "Consequently, the absence of a network connection when WeeWX starts will cause\n"
                   "WeeWX to exit. The WeeWX 'loop_on_init' setting can be used to mitigate such\n"
                   "problems by having WeeWX retry startup indefinitely. Set to '0' to attempt\n"
                   "startup once only or '1' to attempt startup indefinitely.")
-        loop_on_init = int(weecfg.prompt_with_options(prompt, config_dict.get('loop_on_init', '1'), ['0', '1']))
+        loop_on_init = int(self.ask(prompt, str(config_dict.get('loop_on_init', '1')), ['0', '1']))
         EcowittHttpDriverConfEditor._merge(config_dict, f'loop_on_init = {loop_on_init:d}')
         if not config_dict.comments['loop_on_init']:
             config_dict.comments['loop_on_init'] = ['', '# Whether to try indefinitely to load the driver']
 
-    @staticmethod
-    def do_rain(config_dict):
+    def do_rain(self, config_dict):
         cls = EcowittHttpDriverConfEditor
         drv_config = config_dict.get(DRIVER_NAME, {})
         mapper = HttpMapper(**drv_config)
@@ -1575,8 +2357,10 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
             print(f'Unable to query the device for paired rain gauges: {e}')
             paired = ()
         paired_str = 'none' if not paired else ('both' if len(paired) == 2 else paired[0])
-        print()
-        paired_gauges = weecfg.prompt_with_options(cls._wrap(
+        current = str(drv_config.get('rain_source', '')).lower()
+        if not self.prompting and current in ('tipping', 'piezo', 'both') and not paired:
+            paired_str = 'both'          # device not reachable: keep the current rain_source
+        paired_gauges = self.ask(cls._wrap(
             "Ecowitt gateways/consoles can simultaneously support both tipping and piezoelectric (piezo) rain "
             "gauges. Select the gauge type(s) paired with this device. Set to 'none' if no gauges are paired, "
             "'tipping' if only a tipping gauge is paired, 'piezo' if only a piezo gauge is paired or 'both' if "
@@ -1607,8 +2391,9 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
         possible = {'both': ['both', 'tipping', 'piezo', 'none'], 'tipping': ['tipping', 'none'],
                     'piezo': ['piezo', 'none']}[paired_gauges]
         default = curr_type if curr_type != 'none' or paired_gauges != 'both' else 'both'
-        print()
-        user_type = weecfg.prompt_with_options(cls._wrap(
+        if not self.prompting and current in possible:
+            default = current            # no prompts: keep rain_source as it is
+        user_type = self.ask(cls._wrap(
             "Choose how the rain gauges are recorded: 'both' records the tipping gauge in 'rain'/'rainRate' and "
             "the piezo gauge in 'p_rain'/'hail'/'p_rainrate'; 'tipping' or 'piezo' feeds WeeWX 'rain'/'rainRate' "
             "from that gauge; 'none' leaves the WeeWX rain fields unpopulated."),
@@ -1679,6 +2464,11 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
                 f'       %prog --sensors\n            {common}[--show-all-batt]\n            [--debug=0|1|2|3]\n'
                 f'       %prog --list-sensors\n            {common}[--no-sensor-map]\n            [--debug=0|1|2|3]\n'
                 f'       %prog --active-map\n            {common}[--no-sensor-map]\n            [--debug=0|1|2|3]\n'
+                f'       %prog --sd-files\n            {common}\n'
+                f'       %prog --catchup-dry-run\n            {common}[--since=DATE] '
+                f'[--catchup-source=either|device|net]\n'
+                f'       %prog --sources\n'
+                f'   (with [[sources]], add --source=NAME to choose the gateway for the other commands)\n'
                 f'       %prog --dump-api\n            {common}[--output=FILE] [--unmask]\n'
                 f'       %prog --firmware|--mac-address|--system-params|\n'
                 f'            --get-rain-data|--get-all-rain_data\n            {common}[--debug=0|1|2|3]\n'
@@ -1700,6 +2490,10 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
                 ('--dump-api', 'dump_api', 'save every raw API response as JSON (passwords masked)'),
                 ('--no-sensor-map', 'no_sensor_map', 'ignore [[sensor_map]] and show gateway channels'),
                 ('--active-map', 'active_map', 'display the field map entries the device is reporting now'),
+                ('--sd-files', 'sd_files', 'display the SD card and the history files on it'),
+                ('--catchup-dry-run', 'catchup_dry_run',
+                 'fetch the records catchup would save after --since, without saving them'),
+                ('--sources', 'sources', 'display the gateways in [[sources]] and whether they answer'),
                 ('--firmware', 'firmware', 'display device firmware information'),
                 ('--mac-address', 'mac', 'display device station MAC address'),
                 ('--system-params', 'sys_params', 'display device system parameters'),
@@ -1720,6 +2514,14 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
             parser.add_option(opt, dest=dest, action='store_true', help=text)
         parser.add_option('--ip-address', dest='ip_address', help='device IP address to use')
         parser.add_option('--output', dest='output', metavar='FILE', help='file for --dump-api output')
+        parser.add_option('--source', dest='source', metavar='NAME',
+                          help='with [[sources]]: the gateway to use (default: the first one)')
+        parser.add_option('--since', dest='since', metavar='DATE',
+                          help="start for --catchup-dry-run: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' "
+                               "(default 24 hours ago)")
+        parser.add_option('--catchup-source', dest='catchup_source', type='choice',
+                          choices=['either', 'device', 'net'],
+                          help='catchup source for --catchup-dry-run (default: [[catchup]] in weewx.conf)')
         parser.add_option('--api', dest='api', type='choice', choices=['auto', 'http', 'tcp'],
                           help='device API: http, tcp (GW1000/WH2650) or auto (the default)')
         for opt, dest, text in (('--max-tries', 'max_tries', 'max number of attempts to contact the device'),
@@ -1743,8 +2545,8 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
             print(f"debug level is '{weewx.debug:d}'")
         weeutil.logger.setup('weewx', config_dict)
         define_units()
-        DirectEcowittDevice(options, parser, driver_config(config_dict),
-                            html_dir=html_root(config_dict)).process_options()
+        DirectEcowittDevice(options, parser, driver_config(config_dict), html_dir=html_root(config_dict),
+                            archive_interval=std_archive_interval(config_dict)).process_options()
 
 
 # ---------------------------------------------------------------------------
@@ -2065,7 +2867,7 @@ class EcowittDeviceCatchup:
         return converted
 
     def get_file(self, file_name):
-        url = f'http://{self.ip_address}:81/{file_name}'
+        url = f"http://{self.ip_address.split(':')[0]}:81/{file_name}"   # port 81 even if ip_address has a port
         for attempt in range(1, self.max_catchup_retries + 1):
             try:
                 return urllib.request.urlopen(url, timeout=self.url_timeout)
@@ -2088,7 +2890,8 @@ class EcowittDeviceCatchup:
             ts_index = 0
         indexed = {}
         for f in sd_info['file_list']:
-            if f['type'] in ('file', '1'):
+            # files such as 'log' that are not named YYYYMM... are not history files
+            if f['type'] in ('file', '1') and str(f.get('name', ''))[0:6].isdigit():
                 index = int(f['name'][0:4]) * 100 + int(f['name'][4:6])
                 if index >= ts_index:
                     indexed.setdefault(index, []).append(f['name'])
@@ -3566,15 +4369,31 @@ class DirectEcowittDevice:
                (('list_sensors',), 'display_sensor_list'), (('dump_api',), 'dump_api'),
                (('live',), 'display_live_data'), (('discover',), 'display_discovered_devices'),
                (('map',), 'display_field_map'), (('driver_map',), 'display_driver_field_map'),
-               (('service_map',), 'display_service_field_map'), (('active_map',), 'display_active_field_map'))
+               (('service_map',), 'display_service_field_map'), (('active_map',), 'display_active_field_map'),
+               (('sd_files',), 'display_sd_files'), (('catchup_dry_run',), 'catchup_dry_run'),
+               (('sources',), 'display_sources'))
 
     def __init__(self, namespace, arg_parser, stn_dict, **kwargs):
         self.namespace = namespace
         self.arg_parser = arg_parser
+        # with [[sources]], commands about one gateway use --source (default: the first gateway), while
+        # --catchup-dry-run, --test-driver and --test-service use them all unless --source is given
+        self.all_stn_dict = stn_dict
+        self.source_names = []
+        if stn_dict.get('sources'):
+            configs = source_configs(stn_dict)
+            self.source_names = [n for n, _ in configs]
+            wanted = self.opt('source') or configs[0][0]
+            chosen = dict(configs).get(wanted)
+            if chosen is None:
+                raise weewx.ViolatedPrecondition(f"--source={wanted}: no such gateway in [[sources]] "
+                                                 f"({', '.join(self.source_names)})")
+            stn_dict = dict(chosen)
         self.stn_dict = stn_dict
         self.unit_system = DEFAULT_UNIT_SYSTEM
         self.discovery_period = kwargs.get('discovery_period', DEFAULT_DISCOVERY_PERIOD)
         self.html_dir = kwargs.get('html_dir')
+        self.archive_interval = kwargs.get('archive_interval')
         self.ip_address = self.ip_from_config_opts()
         self.show_battery, source = self.bool_from_config('show_battery', DEFAULT_FILTER_BATTERY)
         sources = {'default': 'using the default', 'station': 'obtained from station config',
@@ -3934,6 +4753,73 @@ class DirectEcowittDevice:
                                        ('mqtt_password', 'Password', True)):
                 print(f'{label:>22}: {mask(key) if masked else data.get(key)}')
 
+    def display_sd_files(self):
+        """The gateway's SD card and the history files on it (what catchup from the device reads)."""
+        device, data = self.query(lambda d: d.get_sdmmc_info_data())
+        if device is None or data is None:
+            return
+        info = data.get('info', {})
+        print()
+        for key in ('Name', 'Type', 'Speed', 'Size', 'Interval'):
+            if key in info:
+                print(f"{key + (' (minutes)' if key == 'Interval' else ''):>18}: {info[key]}")
+        files = [f for f in data.get('file_list', []) if f.get('type') in ('file', '1')]
+        print()
+        if not files:
+            print('No history files on the SD card.')
+            return
+        print(f'{len(files)} history file(s), read from http://{device.ip_address.split(":")[0]}:81/<name>:')
+        for f in sorted(files, key=lambda f: f.get('name', '')):
+            print(f"    {f.get('name', '?'):<28} {f.get('size', '')}")
+
+    @staticmethod
+    def parse_since(text):
+        """A timestamp from 'YYYY-MM-DD', 'YYYY-MM-DD HH:MM' or 'YYYY-MM-DDTHH:MM' (local time)."""
+        for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%dT%H:%M', '%Y-%m-%d'):
+            try:
+                return int(datetime.datetime.strptime(text.strip(), fmt).timestamp())
+            except ValueError:
+                pass
+        raise ValueError(f"'{text}' is not a date such as 2026-11-05 or 2026-11-05 14:30")
+
+    def catchup_dry_run(self):
+        """Fetch the records catchup would save after --since (default 24 hours ago), without saving them."""
+        try:
+            since = self.parse_since(self.opt('since')) if self.opt('since') else int(time.time()) - 86400
+        except ValueError as e:
+            print(e)
+            return
+        if self.opt('catchup_source'):
+            for config in [self.stn_dict, self.all_stn_dict] + list((self.all_stn_dict.get('sources') or {}).values()):
+                config['catchup'] = {**config.get('catchup', {}), 'source': self.opt('catchup_source')}
+                config.pop('history', None)
+        fields = ('outTemp', 'outHumidity', 'windSpeed', 'windGust', 'barometer', 'rain')
+
+        def run(driver):
+            source = driver.source
+            if driver.multi:
+                print(f'Merged {(driver.std_archive_interval or 300) // 60}-minute records from all the gateways '
+                      f'after {timestamp_to_string(since)}')
+                records = driver.genArchiveRecords(since)
+            else:
+                print(f"Catchup source: {source.catchup_source or 'either'}; records after {timestamp_to_string(since)}")
+                records = source.history(since, archive_interval=driver.std_archive_interval)
+            print('Nothing is saved.')
+            print()
+            print(f"{'time':<17} {'min':>3} " + ' '.join(f'{f:>11}' for f in fields))
+            count, rain = 0, 0.0
+            for rec in records:
+                count += 1
+                rain += rec.get('rain') or 0.0
+                values = ' '.join(f"{'' if rec.get(f) is None else round(rec[f], 2):>11}" for f in fields)
+                when = time.strftime('%Y-%m-%d %H:%M', time.localtime(rec['dateTime']))
+                print(f"{when:<17} {rec.get('interval', ''):>3} {values}")
+            print()
+            print(f'{count} record(s), rain {round(rain, 2)} mm in total' if count else
+                  'No records: check [[catchup]] in weewx.conf, the SD card (--sd-files) or the Ecowitt.net keys.')
+
+        self.run_driver(run, all_sources=True)
+
     def display_mac(self):
         device, mac = self.query(lambda d: d.mac_address)
         if device is not None:
@@ -4278,7 +5164,7 @@ class DirectEcowittDevice:
         service = f'{DRIVER_MODULE}.EcowittHttpService'
         config = {'Station': {'station_type': 'Simulator', 'altitude': [0, 'meter'], 'latitude': 0, 'longitude': 0},
                   'Simulator': {'driver': 'weewx.drivers.simulator', 'mode': 'simulator'},
-                  DRIVER_NAME: {'ip_address': self.ip_address},
+                  DRIVER_NAME: dict(self.all_stn_dict) if self.use_all_sources else {'ip_address': self.ip_address},
                   'Engine': {'Services': {'archive_services': service, 'report_services': 'weewx.engine.StdPrint'}}}
         for opt, key in (('poll_interval', 'poll_interval'), ('max_tries', 'max_tries'), ('retry_wait', 'retry_wait')):
             if self.opt(opt):
@@ -4310,8 +5196,53 @@ class DirectEcowittDevice:
         self.run_service(lambda engine, svc: self.print_field_map(
             svc.mapper.field_map, 'Ecowitt HTTP driver service actual field map:', 'service'))
 
-    def run_driver(self, action):
-        """Create a driver from the station config (plus command line overrides) and pass it to action."""
+    @property
+    def use_all_sources(self):
+        return len(self.source_names) > 1 and not self.opt('source')
+
+    def display_sources(self):
+        """The gateways in [[sources]], in priority order, and whether each one answers."""
+        if not self.source_names:
+            print('There is no [[sources]] section: the driver uses one gateway, ip_address = '
+                  f"{self.all_stn_dict.get('ip_address')}")
+            return
+        print(f"{'gateway':<12} {'ip_address':<22} {'catchup':<8} model")
+        for name, config in source_configs(self.all_stn_dict):
+            try:
+                device = make_device(config['ip_address'], api=config.get('api', DEFAULT_API),
+                                     tcp_port=config.get('tcp_port', DEFAULT_TCP_PORT),
+                                     url_timeout=weeutil.weeutil.to_int(config.get('url_timeout', DEFAULT_URL_TIMEOUT)),
+                                     max_tries=1)
+                model = device.model or '?'
+            except (DeviceIOError, OSError, weewx.ViolatedPrecondition) as e:
+                model = f'not answering ({e})'
+            catchup = str(config.get('catchup', {}).get('source', 'either'))
+            print(f"{name:<12} {config['ip_address']:<22} {catchup:<8} {model}")
+        priority = self.all_stn_dict.get('priority') or {}
+        if priority:
+            print()
+            print('[[priority]]:')
+            for field, order in priority.items():
+                print(f"    {field} = {', '.join(as_names(order))}")
+
+    def run_driver(self, action, all_sources=False):
+        """Create a driver from the station config (plus command line overrides) and pass it to action.
+        all_sources: with [[sources]] and no --source, a driver for all the gateways."""
+        if all_sources and self.use_all_sources:
+            driver = None
+            try:
+                driver = EcowittHttpDriver(html_dir=self.html_dir, archive_interval=self.archive_interval,
+                                           **self.all_stn_dict)
+                print()
+                print('Gateways: ' + ', '.join(f'{BOLD}{s.name}{ENDC} ({s.ip_address})' for s in driver.sources))
+                print()
+                action(driver)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                if driver is not None:
+                    driver.closePort()
+            return
         self.stn_dict['ip_address'] = self.ip_address
         for opt, key in (('poll_interval', 'poll_interval'), ('max_tries', 'max_tries'),
                          ('retry_wait', 'retry_wait'), ('timeout', 'url_timeout'), ('api', 'api')):
@@ -4321,7 +5252,8 @@ class DirectEcowittDevice:
             self.stn_dict.pop('sensor_map', None)
         driver = None
         try:
-            driver = EcowittHttpDriver(html_dir=self.html_dir, **self.stn_dict)
+            driver = EcowittHttpDriver(html_dir=self.html_dir, archive_interval=self.archive_interval,
+                                       **self.stn_dict)
             device = driver.collector.device
             print()
             print(f'Interrogating {BOLD}{device.model}{ENDC} at {BOLD}{device.ip_address}{ENDC}')
@@ -4349,7 +5281,7 @@ class DirectEcowittDevice:
             for pkt in driver.genLoopPackets():
                 print(f"{timestamp_to_string(pkt['dateTime'])}: {weeutil.weeutil.to_sorted_string(pkt)}")
 
-        self.run_driver(run)
+        self.run_driver(run, all_sources=True)
         log.info('Ecowitt HTTP driver testing complete')
 
     def test_service(self):
@@ -4431,6 +5363,15 @@ def main():
                      [CONFIG_FILE|--config=CONFIG_FILE]
                      [--ip-address=IP_ADDRESS] [--no-sensor-map]
                      [--debug=0|1|2|3]
+                --sd-files
+                     [CONFIG_FILE|--config=CONFIG_FILE] [--ip-address=IP_ADDRESS]
+                --catchup-dry-run
+                     [CONFIG_FILE|--config=CONFIG_FILE] [--ip-address=IP_ADDRESS]
+                     [--since=DATE] [--catchup-source=either|device|net]
+                --sources
+                     [CONFIG_FILE|--config=CONFIG_FILE]
+        With [[sources]] (several gateways), add --source=NAME to choose the gateway
+        for the other commands (default: the first one).
                 --discover
                      [CONFIG_FILE|--config=CONFIG_FILE]
                      [--debug=0|1|2|3]{ENDC}
@@ -4452,6 +5393,10 @@ def main():
             ('--default-map', 'map', 'display the default field map'),
             ('--driver-map', 'driver_map', 'display the field map that would be used by the driver'),
             ('--active-map', 'active_map', 'display the driver field map entries the device is reporting now'),
+            ('--sd-files', 'sd_files', 'display the SD card and the history files on it'),
+            ('--catchup-dry-run', 'catchup_dry_run',
+             'fetch the records catchup would save after --since, without saving them'),
+            ('--sources', 'sources', 'display the gateways in [[sources]] and whether they answer'),
             ('--service-map', 'service_map', 'display the field map that would be used by the service'),
             ('--firmware', 'firmware', 'display device firmware information'),
             ('--mac', 'mac', 'display device MAC address'),
@@ -4488,6 +5433,12 @@ def main():
                         default=weewx.units.unit_nicknames[DEFAULT_UNIT_SYSTEM],
                         help='unit system to use when displaying live data')
     parser.add_argument('--output', dest='output', metavar='FILE', help='file for --dump-api output')
+    parser.add_argument('--source', dest='source', metavar='NAME',
+                        help='with [[sources]]: the gateway to use (default: the first one)')
+    parser.add_argument('--since', dest='since', metavar='DATE',
+                        help="start for --catchup-dry-run: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (default 24 hours ago)")
+    parser.add_argument('--catchup-source', dest='catchup_source', choices=('either', 'device', 'net'),
+                        help='catchup source for --catchup-dry-run (default: [[catchup]] source in weewx.conf)')
     parser.add_argument('--config', dest='config', metavar='CONFIG_FILE', help='Use configuration file CONFIG_FILE.')
     namespace = parser.parse_args()
     if len(sys.argv) == 1:
@@ -4504,8 +5455,8 @@ def main():
         print(f'debug level is {weewx.debug:d}')
     weeutil.logger.setup('ecowitt_http', config_dict)
     define_units()
-    DirectEcowittDevice(namespace, parser, driver_config(config_dict),
-                        html_dir=html_root(config_dict)).process_options()
+    DirectEcowittDevice(namespace, parser, driver_config(config_dict), html_dir=html_root(config_dict),
+                        archive_interval=std_archive_interval(config_dict)).process_options()
 
 
 if __name__ == '__main__':

@@ -4,7 +4,7 @@ A [WeeWX](https://weewx.com) driver and service for Ecowitt gateways and console
 **local HTTP API**. There's no cloud dependency for live data, and the gateway doesn't need any
 custom-server or upload configuration.
 
-**Version:** 1.2.0 · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
+**Version:** 1.3.0 · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
 
 This driver should be considered a natural evolution of both the GW1000 driver and the
 `ecowitt_local_http` driver: it brings the GW1000/WH2650 (TCP API) and the newer HTTP API gateways
@@ -22,6 +22,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 - [How it works](#how-it-works)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Several gateways](#several-gateways)
 - [Running as a service](#running-as-a-service)
 - [GW1000 and WH2650](#gw1000-and-wh2650)
 - [Rain and lightning](#rain-and-lightning)
@@ -30,8 +31,10 @@ See [CHANGELOG.md](CHANGELOG.md).
 - [Catchup (missed data)](#catchup-missed-data)
 - [Sensor mapping (hardware IDs)](#sensor-mapping-hardware-ids)
 - [Field mapping](#field-mapping)
+- [Checking readings: limits and lost sensors](#checking-readings-limits-and-lost-sensors)
 - [Command-line tools](#command-line-tools)
 - [Troubleshooting](#troubleshooting)
+- [Development](#development)
 - [Versioning](#versioning)
 - [Credits and licence](#credits-and-licence)
 
@@ -94,7 +97,9 @@ last archive record, from the gateway's SD card or from Ecowitt.net.
 ## Installation
 
 See **[INSTALL.md](INSTALL.md)** for step-by-step instructions for Debian/apt and pip installs of
-WeeWX 5.4.0 or later.
+WeeWX 5.4.0 or later, and for
+[unattended installs](INSTALL.md#c-unattended-scripted-install) from Vagrant, Ansible or a script,
+with the answers given in `ECOWITT_*` environment variables.
 
 In short:
 
@@ -145,7 +150,7 @@ earlier betas) if there is no `[EcowittGateway]` section; the installer moves it
 
 | Option | Default | Description |
 |---|---|---|
-| `ip_address` | *(none)* | IP address (or `host:port`) of the gateway. **Required.** |
+| `ip_address` | *(none)* | IP address (or `host:port`) of the gateway. **Required**, unless the gateways are listed in `[[sources]]`. |
 | `poll_interval` | `20` | Seconds between polls. |
 | `max_tries` | `3` | Attempts per API request before giving up. |
 | `retry_wait` | `2` | Seconds to wait between attempts after a timeout. |
@@ -153,18 +158,21 @@ earlier betas) if there is no `[EcowittGateway]` section; the installer moves it
 | `rain_source` | `tipping` | `both`: tipping gauge in `rain`/`rainRate` and piezo gauge in `p_rain`/`hail`/`p_rainrate`. `tipping` or `piezo`: that gauge feeds `rain`/`rainRate`. |
 | `show_all_batt` | `False` | Report battery state even for sensors with no signal. |
 | `log_unknown_fields` | `False` | Log unknown API groups and fields at info level. |
+| `ignore_no_signal` | `False` | Ignore the readings of multi-channel sensors while the gateway reports their signal as 0. See [Checking readings](#checking-readings-limits-and-lost-sensors). |
 | `log_next_update` | `True` | With `debug` set in `weewx.conf`, log `Next update in N seconds` after each poll. Set to `False` to keep debug logging without these lines. |
 | `firmware_update_check_interval` | `86400` | Seconds between firmware update checks (`0` turns them off). Available updates are logged. |
 | `get_soilad` | `True` | Fetch soil moisture AD values when WH51/WH52 sensors are present. |
 | `wn32_indoor` | `False` | Report WH25 battery/signal as an indoor WN32 instead. |
 | `wn32_outdoor` | `False` | Report WH26 battery/signal as an outdoor WN32P instead. |
-| `debug` | *(none)* | Comma-separated list of extra logging: `rain`, `raindelta`, `wind`, `lightning`, `loop`, `sensors`, `parser`, `catchup`, `collector`, `archive`. |
+| `debug` | *(none)* | Comma-separated list of extra logging: `rain`, `raindelta`, `wind`, `lightning`, `loop`, `sensors`, `parser`, `catchup`, `collector`, `archive`, `merge`. |
 | `api_key`, `app_key` | *(none)* | Ecowitt.net keys; only needed for Ecowitt.net catchup. |
 | `api`, `tcp_port` | `auto`, `45000` | Which device API to use. See [GW1000 and WH2650](#gw1000-and-wh2650). |
 | `[[sensor_map]]` | | Report multi-channel sensors on fixed channels by hardware ID. See [Sensor mapping](#sensor-mapping-hardware-ids). |
 | `[[loop_json]]` | | Write each loop packet to `ecwLoop.json`. See [Loop data file](#loop-data-file-ecwloopjson). |
 | `[[mqtt]]` | | Publish each loop packet to an MQTT broker. See [MQTT](#mqtt). |
 | `[[catchup]]` | | See [Catchup](#catchup-missed-data). |
+| `[[limits]]` | | Drop readings outside a minimum and maximum. See [Checking readings](#checking-readings-limits-and-lost-sensors). |
+| `[[sources]]`, `source_priority`, `[[priority]]`, `max_age`, `gap_mode` | | Several gateways. See [Several gateways](#several-gateways). |
 | `[[field_map]]` | | Replaces the default field map completely (advanced). |
 | `[[field_map_extensions]]` | | Adds to or overrides individual entries in the default field map. |
 
@@ -183,6 +191,133 @@ loop_on_init = 1                    # keep retrying if the gateway isn't reachab
 
 Remove any `[StdWXCalculate] [[Delta]] [[[rain]]]` entry. WeeWX 5 adds one by default, and it would
 count rain a second time.
+
+---
+
+## Several gateways
+
+The driver can read two or more gateways at once, for example a GW2000 in the house and a WS3900
+console in the garden, and merge them into one stream of loop packets. If one gateway stops
+answering, the others carry on. List the gateways in `[[sources]]`:
+
+```ini
+[EcowittGateway]
+    driver = user.weewx-EcowittGateway
+    poll_interval = 20              # settings here apply to every gateway
+    max_age = 60                    # how old a gateway's data may be and still be used (seconds)
+    rain_source = both
+    source_priority = house, garden # which gateway wins; default: the order below
+
+    [[sources]]
+        [[[house]]]
+            ip_address = 192.168.1.100
+            [[[[sensor_map]]]]          # hardware IDs belong to one gateway
+                C0FFEE = 2
+        [[[garden]]]
+            ip_address = 192.168.1.101
+            poll_interval = 30          # any setting can be changed for one gateway
+            [[[[catchup]]]]
+                source = none
+
+    [[priority]]                        # per field; overrides source_priority
+        outTemp = garden, house
+        soil* = garden                  # a prefix ending in * covers soilMoist1, soilTemp2 ...
+```
+
+With no `[[sources]]` section the driver uses `ip_address` as before, and nothing below applies.
+
+### How the data is merged
+
+- Each gateway is polled by its own thread, so a gateway that doesn't answer never holds up the
+  others.
+- Each field comes from the first gateway in its priority order whose latest data is no older than
+  `max_age` and has a value for the field. Readings dropped by `[[limits]]` or `ignore_no_signal`
+  count as no value, so the next gateway's reading is used instead.
+- Every gateway inherits the settings of `[EcowittGateway]` and can override any of them, except
+  `[[sensor_map]]`, which has to be given for each gateway (hardware IDs are paired with one
+  gateway).
+- `[[field_map_extensions]]`, `[[limits]]`, `rain_source` and the exports (`[[loop_json]]`,
+  `[[mqtt]]`) apply to the merged packets.
+
+### Rain and lightning from more than one gateway
+
+When two gateways hear the same rain gauge, adding their amounts would count the rain twice. Each
+gateway's rain and lightning counts are worked out from its own running totals, and each field is
+counted from one gateway at a time (the first in its priority order). If that gateway goes quiet for
+`max_age` seconds, the next one takes over without counting any period twice. The rain it reported
+while waiting is added when it takes over, so a handover loses at most the part of one poll
+interval that overlaps.
+
+### When every gateway is out of contact
+
+WeeWX only fills missed archive records at start-up (catchup). If every gateway is silent for longer
+than `archive_interval`, the driver stops sending loop packets until they're all back (or
+`max_gap_wait` has passed). It then restarts the WeeWX engine, so catchup fills the outage from the
+gateways' SD cards or Ecowitt.net. No loop packets are sent while waiting, because the first archive
+record written after the outage would stop catchup from going back any further.
+
+| Option | Default | Description |
+|---|---|---|
+| `gap_mode` | `restart` | `restart`: restart for catchup after an outage of every gateway. `none`: don't. |
+| `max_gap_wait` | `3600` | Seconds to wait for every gateway to come back before restarting anyway. |
+| `min_restart_interval` | `900` | Don't restart again within this many seconds of the last restart. |
+
+An outage of just one gateway can't be filled afterwards: the others keep producing archive records.
+
+### Catchup with several gateways
+
+At start-up each gateway's history (SD card or Ecowitt.net, set by `[[catchup]]`, which each gateway
+can override) is combined into `archive_interval` records: averages for most fields, totals for rain
+and lightning, the maximum for gusts, vector averages for wind directions, and the latest value for
+running totals. The records of all the gateways are then merged by the same priorities as loop
+packets, with an interval's rain taken from one gateway. If the database is empty, there's no
+catchup.
+
+### New loop fields
+
+| Field | Meaning |
+|---|---|
+| `gateway_online_<name>` | `1` while that gateway has answered within `max_age` seconds, otherwise `0` |
+| `gateway_online` | `1` while any gateway is answering |
+
+### Commands
+
+```bash
+weectl device --sources                        # the gateways, in priority order, and whether they answer
+weectl device --live-data --source=garden      # any other command, for one gateway
+weectl device --catchup-dry-run --since=2026-11-06   # the merged catchup records of all the gateways
+```
+
+Without `--source`, commands about one gateway use the first one. `--catchup-dry-run`,
+`--test-driver` and `--test-service` use all of them unless `--source` is given. Add `merge` to
+`debug` to log which gateway each field came from.
+
+### Service mode
+
+The service merges several gateways in the same way, then adds the fields the main driver hasn't
+set. `t_rain` and `p_rain` are counted once across the gateways, as above.
+
+### Moving from weewx-ecowitt-multi
+
+The multi-gateway merge follows the design of
+[weewx-ecowitt-multi](https://github.com/mKainzbauer/weewx-ecowitt-multi) by mKainzbauer. Its
+`[[sources]]` settings mostly carry over:
+
+| weewx-ecowitt-multi (`[EcowittMulti]`) | This driver (`[EcowittGateway]`) |
+|---|---|
+| `driver = user.ecowitt_multi`, `station_type = EcowittMulti` | `driver = user.weewx-EcowittGateway`, `station_type = EcowittGateway` |
+| `host`, `port` | `ip_address` (`host` and `port` are also accepted) |
+| `history = auto \| sd \| cloud \| none` | `[[[[catchup]]]] source = either \| device \| net \| none` (`history` is also accepted) |
+| `type = http` | (always HTTP, or the TCP API for a GW1000/WH2650) |
+| `source_priority`, `[[priority]]` with `prefix*` | the same |
+| `cache_max_age` | `max_age` (default `60` seconds rather than `archive_interval`) |
+| `gap_mode`, `max_gap_wait`, `min_restart_interval` | the same |
+| `diagnostic_fields` | `gateway_online_<name>` is always included |
+
+Not carried over: MQTT sources (`type = mqtt`), the sensor catalog and the Ecowitt database schema,
+`poll_mode = auto` (every gateway is polled all the time) and the default plausibility limits for
+every unit group (`[[limits]]` sets limits per field instead). Unknown fields aren't passed on as
+`ecowitt_<key>`; `log_unknown_fields` logs them.
 
 ---
 
@@ -205,10 +340,15 @@ install the extension but leave `station_type` alone, then add the service:
 
 In service mode:
 
-- only fields the main driver hasn't already set are added;
+- only fields the main driver hasn't already set are added, and only from gateway data newer than
+  `max_age`;
 - per-period rain is written only to `t_rain` (tipping) and `p_rain` (piezo), not `rain`/`hail`, so
-  the main driver's rain isn't counted twice;
-- values are converted to the packet's unit system.
+  the main driver's rain isn't counted twice. When the gateway is polled more than once between two
+  loop packets, the rain from every poll is included;
+- values, including `t_rain` and `p_rain`, are converted to the packet's unit system;
+- `gateway_online` is `1` while the gateway has answered within `max_age` seconds, and `0` when it
+  hasn't, so you can see in the loop data (or the archive, as the fraction of time online) when the
+  gateway was out of contact.
 
 ---
 
@@ -385,7 +525,7 @@ total (or the monthly total if there is no yearly one).
 | `lightning_dist`, `lightning_disturber_count` | Last strike distance and time |
 
 The first packet after start-up has no rain or strike delta (there's no previous total to compare
-with). When a total resets, for example at the start of a new year, the new total is used as the delta.
+with), and nor does a poll in which the gateway doesn't report the total. When a total resets, for example at the start of a new year, the new total is used as the delta.
 
 `rain_source` chooses how the gauges are used:
 
@@ -425,6 +565,23 @@ At start-up WeeWX asks the driver for any records it missed:
   `[EcowittGateway]`. Only the last 90 days are available.
 - **`either`** (the default): tries the SD card first, then Ecowitt.net.
 - **`none`**: don't fetch missed data.
+
+The records keep their own interval: the SD card's logging interval (`weectl device --sd-files`
+shows it), or 5 minutes from Ecowitt.net. If that differs from `archive_interval` in `[StdArchive]`,
+a warning is logged, because the archive then has records of two lengths for the catchup period.
+Set the SD card's interval to match `archive_interval` (in the WS View Plus app) to avoid it. After a
+catchup, one line in the log gives the number of records and the time they cover. `[[limits]]`
+apply to catchup records too.
+
+To see what a catchup would fetch, without saving anything:
+
+```bash
+weectl device --catchup-dry-run --since="2026-11-05 14:00"            # [[catchup]] source in weewx.conf
+weectl device --catchup-dry-run --since=2026-11-05 --catchup-source=net
+```
+
+It prints one line per record (time, interval, temperature, humidity, wind, pressure and rain) and the
+total rain. `--since` defaults to 24 hours ago.
 
 ---
 
@@ -551,6 +708,50 @@ Use `--live-data` to see the fields your own gateway provides.
 
 ---
 
+## Checking readings: limits and lost sensors
+
+### Limits
+
+`[[limits]]` drops readings that can't be right, for example a temperature spike from a failing
+sensor, before they reach WeeWX. A reading outside its limits is set to `None`, so WeeWX treats it
+as missing:
+
+```ini
+[EcowittGateway]
+    [[limits]]
+        outTemp = -50, 60            # degree_C
+        outHumidity = 0, 100
+        windGust = , 75              # meter_per_second; no lower limit
+        barometer = 950, 1060        # hPa
+        rain = , 25                  # mm in one poll
+        extraTemp1 = -40, 140, degree_F
+```
+
+- Each line is `<WeeWX field> = min, max`, with an optional third item giving the unit of `min` and
+  `max`.
+- Without a unit, the limits are in the driver's own units (WeeWX METRICWX): `degree_C`,
+  `meter_per_second`, `hPa`, `mm` and `mm_per_hour`. This is so even if your database uses US units.
+- Leave `min` or `max` empty for no limit on that side.
+- They apply to loop packets and to catchup records.
+- The first reading dropped for each field is logged. With `debug = 1` every one is.
+
+### Sensors with no signal
+
+When a multi-channel sensor (WN31, WN34, WN35, WH41, WH51, WH54 or WH55) stops being heard, for
+example because its battery is flat, the gateway can keep reporting its last readings for a while.
+With
+
+```ini
+[EcowittGateway]
+    ignore_no_signal = True
+```
+
+the readings of a multi-channel sensor are ignored while the gateway reports its signal as `0`. Its
+signal and battery fields are still reported, and the log says when a sensor's readings start being
+ignored and when it's heard again. It's off by default.
+
+---
+
 ## Command-line tools
 
 With WeeWX 5, use `weectl device` (it reads your `weewx.conf`):
@@ -561,6 +762,10 @@ With WeeWX 5, use `weectl device` (it reads your `weewx.conf`):
 | `weectl device --sensors [--show-all-batt]` | Sensor IDs, signal, RSSI and battery state |
 | `weectl device --list-sensors [--no-sensor-map]` | Multi-channel sensors by hardware ID: gateway channel, reported channel, a live reading and the WeeWX fields fed, plus a ready-made `[[sensor_map]]` |
 | `weectl device --active-map [--no-sensor-map]` | The field map entries your gateway is filling now (WeeWX field: gateway field) |
+| `weectl device --sd-files` | The SD card, its logging interval and the history files on it |
+| `weectl device --catchup-dry-run [--since=DATE] [--catchup-source=either\|device\|net]` | The records a catchup would fetch, without saving them |
+| `weectl device --sources` | With `[[sources]]`: the gateways in priority order, and whether each answers |
+| `... --source=NAME` | With `[[sources]]`: run any command for one gateway |
 | `weectl device --dump-api [--output=FILE] [--unmask]` | Every raw API response as one JSON document, secrets masked |
 | `weectl device --firmware` | Gateway and sensor firmware, and whether an update is available |
 | `weectl device --mac-address` | Gateway MAC address |
@@ -612,12 +817,19 @@ Logs:
 
 ---
 
+## Development
+
+[DEVELOPMENT.md](DEVELOPMENT.md) explains how to run the tests, how to add your own gateway's
+responses as test data, and how the code is laid out.
+
+---
+
 ## Versioning
 
 See **[VERSIONING.md](VERSIONING.md)**. In brief:
 
 - releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (e.g. `1.1.0b1`);
-- the current release is 1.2.0; 1.0.0 was the first full release, following the 0.0.1 betas;
+- the current release is 1.3.0; 1.0.0 was the first full release, following the 0.0.1 betas;
 - from 1.0.0 the configuration options and WeeWX field names are frozen: a breaking change needs a
   new MAJOR version;
 - configuration compatibility with `ecowitt_http.py` is kept throughout 1.x.
@@ -631,6 +843,12 @@ Copyright (C) 2026 Ian Millard
 This driver is derived from `ecowitt_http.py`:
 
 - Copyright (C) 2024-25 Gary Roderick
+
+The multi-gateway merge (priorities, counting rain across gateways, restarting for catchup after an
+outage, and merging catchup records) follows the design of
+[weewx-ecowitt-multi](https://github.com/mKainzbauer/weewx-ecowitt-multi):
+
+- Copyright (C) 2026 mKainzbauer
 
 Released under the GNU General Public License v3 or (at your option) any later version; the full text
 is in [LICENSE](LICENSE).

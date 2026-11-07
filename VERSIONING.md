@@ -41,7 +41,7 @@ weectl extension list
 python3 weewx-EcowittGateway.py --version
 ```
 
-It also appears in the WeeWX log at start-up (`EcowittHttpDriver: version is 1.2.0`).
+It also appears in the WeeWX log at start-up (`EcowittHttpDriver: version is 1.3.0`).
 
 ## Release history and roadmap
 
@@ -58,19 +58,27 @@ It also appears in the WeeWX log at start-up (`EcowittHttpDriver: version is 1.2
 7. **1.2.0** (6 November 2026): `ws68_batt` back as a field (no automatic database column),
    better WH68 battery state, scripted installs, `log_next_update`, `--active-map`, and long log
    lines split so syslog doesn't cut them off.
-8. **1.x:** new sensors and features (MINOR) and bug fixes (PATCH), with `b`/`rc` pre-releases for
+8. **1.3.0** (7 November 2026): a test suite; the per-gateway code moved into one part
+   (`GatewaySource`) ready for a multi-gateway mode; `[[limits]]`, `ignore_no_signal`,
+   `gateway_online`, catchup checks, `--sd-files` and `--catchup-dry-run`; service-mode rain fixes;
+   several gateways (`[[sources]]`), following the design of weewx-ecowitt-multi.
+9. **1.x:** new sensors and features (MINOR) and bug fixes (PATCH), with `b`/`rc` pre-releases for
    testing where useful.
 
 ## Release checklist
 
-1. Move the `[Unreleased]` items in `CHANGELOG.md` into a new version section and add the date,
-   written as day month year (e.g. `24 September 2026`).
+1. In `CHANGELOG.md`, replace `in development` in the version's heading with the release date,
+   written as day month year (e.g. `24 September 2026`). Do the same in the release history below,
+   and remove `(in development)` from the README's version line and its Versioning section.
 2. Update `DRIVER_VERSION`, the header `Version:` line and `install.py` `VERSION`.
-3. Check the code: `python3 -m pyflakes bin/user/weewx-EcowittGateway.py install.py`.
-4. Test on a scratch station: `weectl extension install`, `weectl station reconfigure`,
+3. Rebuild the plain-text copies of the documents: `python3 tools/md_to_txt.py` (each `NAME.md`
+   has a `NAME.txt` beside it; edit the `.md` files, never the `.txt` ones).
+4. Check the code: `python3 -m pyflakes bin/user/weewx-EcowittGateway.py install.py`, and run the
+   tests: `python3 -m pytest tests` (see DEVELOPMENT.md).
+5. Test on a scratch station: `weectl extension install`, `weectl station reconfigure`,
    `weectl device --live-data`, then `weectl extension uninstall`.
-5. Build the package from the directory above `weewx-EcowittGateway/`:
+6. Build the package from the directory above `weewx-EcowittGateway/`:
    ```bash
    zip -r weewx-EcowittGateway-<version>.zip weewx-EcowittGateway
    ```
-6. Tag the release in version control as `v<version>`, e.g. `v1.0.0`.
+7. Tag the release in version control as `v<version>`, e.g. `v1.0.0`.

@@ -47,7 +47,7 @@ import weewx
 
 from weecfg.extension import ExtensionInstaller
 
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 MODULE = 'weewx-EcowittGateway'
 SECTION = 'EcowittGateway'
 LEGACY_SECTION = 'EcowittHttp'
@@ -111,6 +111,9 @@ DRIVER_CONFIG = f"""
     log_unknown_fields = False
     # whether to log 'Next update in N seconds' after each poll when debug is set
     log_next_update = True
+    # whether to ignore readings from multi-channel sensors (WN31, WN34, WN35,
+    # WH41, WH51, WH54, WH55) while the gateway reports their signal as 0
+    ignore_no_signal = False
     # how often to check for device firmware updates (seconds), 0 disables
     firmware_update_check_interval = 86400
 
@@ -123,6 +126,13 @@ DRIVER_CONFIG = f"""
     #     <sensor ID> = <channel>
     # 'weectl device --list-sensors' shows the IDs and a ready-made list
     [[sensor_map]]
+
+    # drop readings outside these limits:  <WeeWX field> = min, max[, unit]
+    # without a unit, the limits are in METRICWX units (degree_C, meter_per_second,
+    # hPa, mm, mm_per_hour); leave min or max empty for no limit on that side
+    #     outTemp = -50, 60
+    #     windGust = , 75
+    [[limits]]
 
     # where to fetch missed data from at startup: either, device, net or none
     [[catchup]]

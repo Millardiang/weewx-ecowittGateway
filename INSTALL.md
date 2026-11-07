@@ -122,69 +122,8 @@ If the installer is run without a terminal (for example from a script), it doesn
 Unless you give the answers in environment variables (below), it saves the default settings with
 `ip_address = replace_me` and doesn't change the station driver.
 
-### Scripted (unattended) install
-
-Every question can be answered with an `ECOWITT_*` environment variable, so the install can run
-from Vagrant, Ansible, cloud-init or a shell script with no manual steps. A question whose variable
-is set isn't asked; any other question takes its default (or your current setting on an upgrade)
-when there's no terminal. Set `ECOWITT_NO_PROMPT=yes` to stop it asking anything even when it's run
-at a terminal. Add `--yes` so that `weectl` doesn't ask for confirmation either.
-
-```bash
-sudo ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver ECOWITT_RAIN_SOURCE=both \
-     ECOWITT_CATCHUP=device ECOWITT_LOOP_JSON=no ECOWITT_MQTT=no \
-     weectl extension install --yes weewx-EcowittGateway-<version>.zip
-```
-
-Put the variables after `sudo` as shown (or use `sudo env VAR=value …`): `sudo` doesn't pass on
-variables exported earlier. A Vagrant shell provisioner already runs as root, so `export` works
-there.
-
-| Variable | Values | Question |
-|---|---|---|
-| `ECOWITT_NO_PROMPT` | yes/no | Never prompt, even at a terminal |
-| `ECOWITT_IP_ADDRESS` | IP address or `host:port` | Gateway IP address |
-| `ECOWITT_POLL_INTERVAL` | seconds | Poll interval |
-| `ECOWITT_MODE` | `driver`, `service`, `skip` | How to use the gateway (defaults to `driver` when `ECOWITT_IP_ADDRESS` is set) |
-| `ECOWITT_RAIN_SOURCE` | `both`, `tipping`, `piezo` | Rain gauges to use (driver mode) |
-| `ECOWITT_CATCHUP` | `either`, `device`, `net`, `none` | Where to fetch missed data from |
-| `ECOWITT_API_KEY`, `ECOWITT_APP_KEY` | text | Ecowitt.net keys |
-| `ECOWITT_SENSOR_MAP` | yes/no | Lock multi-channel sensors to their channels (default yes) |
-| `ECOWITT_SHOW_ALL_BATT` | yes/no | Show battery state for sensors with no signal |
-| `ECOWITT_LOOP_ON_INIT` | yes/no | Keep retrying at start-up (driver mode, default yes) |
-| `ECOWITT_LOOP_JSON` | yes/no | Write `ecwLoop.json` |
-| `ECOWITT_LOOP_JSON_LOCATION` | `web`, `data`, `tmp`, `custom` | Where to write it |
-| `ECOWITT_LOOP_JSON_PATH` | folder or file path | Custom location (setting this on its own means `custom`) |
-| `ECOWITT_LOOP_JSON_UNITS` | `native`, `us`, `metric`, `metricwx` | Units in the file |
-| `ECOWITT_MQTT` | yes/no | Publish to an MQTT broker |
-| `ECOWITT_MQTT_HOST`, `ECOWITT_MQTT_PORT` | host name, port | Broker address |
-| `ECOWITT_MQTT_TLS` | yes/no | Encrypted connection |
-| `ECOWITT_MQTT_USERNAME`, `ECOWITT_MQTT_PASSWORD` | text | Broker login |
-| `ECOWITT_MQTT_TOPIC` | text | Topic (default `weewx/ecowitt`) |
-| `ECOWITT_MQTT_FORMAT` | `json`, `individual`, `both` | Message format |
-| `ECOWITT_MQTT_UNITS` | `native`, `us`, `metric`, `metricwx` | Units |
-| `ECOWITT_MQTT_RETAIN` | yes/no | Retain messages on the broker |
-| `ECOWITT_MQTT_CA_CERTS` | file path | CA certificate for a private certificate authority |
-
-Yes/no values also accept `y`/`n`, `true`/`false`, `on`/`off` and `1`/`0`. Each answer taken from a
-variable is printed (passwords and keys as `********`). All the variables are checked before
-anything is changed: a bad value stops the install with a message such as
-`ECOWITT_MODE='drvier' is not one of: driver, service, skip` and leaves `weewx.conf` alone, and a
-misspelt name is reported as an unknown setting. If the gateway can't be reached when the address
-comes from `ECOWITT_IP_ADDRESS`, the installer says so and carries on with that address.
-
-A Vagrant example:
-
-```ruby
-config.vm.provision "shell", inline: <<-SHELL
-  export ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver ECOWITT_CATCHUP=device
-  weectl extension install --yes /vagrant/weewx-EcowittGateway-<version>.zip
-  systemctl restart weewx
-SHELL
-```
-
-Settings the installer doesn't ask about (for example `log_next_update`, or a `debug` option) can be
-set afterwards with any config tool, or with `sed`, before WeeWX is started.
+To install with no questions at all, for example from Vagrant, Ansible or a provisioning script,
+see [C. Unattended (scripted) install](#c-unattended-scripted-install).
 
 ---
 
@@ -201,7 +140,7 @@ set afterwards with any config tool, or with `sed`, before WeeWX is started.
 
 ```bash
 # 1. Install the extension and answer the prompts
-sudo weectl extension install weewx-EcowittGateway-1.2.0.zip
+sudo weectl extension install weewx-EcowittGateway-1.3.0.zip
 
 # 2. Check it can talk to the gateway
 sudo weectl device --live-data
@@ -214,7 +153,7 @@ sudo journalctl -u weewx -f
 When it's working, the log shows lines like:
 
 ```
-EcowittHttpDriver: version is 1.2.0
+EcowittHttpDriver: version is 1.3.0
      device IP address is 192.168.1.100
 EcowittHttpCollector startup
 Using 'rain.0x13.val' for rain total
@@ -226,7 +165,7 @@ Using 'rain.0x13.val' for rain total
 sudo systemctl stop weewx
 sudo weectl extension list                       # note the old extension's name
 sudo weectl extension uninstall <old-name>       # or delete /etc/weewx/bin/user/ecowitt_http.py
-sudo weectl extension install weewx-EcowittGateway-1.2.0.zip
+sudo weectl extension install weewx-EcowittGateway-1.3.0.zip
 sudo systemctl start weewx
 ```
 
@@ -287,7 +226,7 @@ source ~/weewx-venv/bin/activate
 source ~/weewx-venv/bin/activate
 
 # 1. Install the extension and answer the prompts
-weectl extension install weewx-EcowittGateway-1.2.0.zip
+weectl extension install weewx-EcowittGateway-1.3.0.zip
 
 # 2. Check it can talk to the gateway
 weectl device --live-data
@@ -309,13 +248,270 @@ source ~/weewx-venv/bin/activate
 sudo systemctl stop weewx                        # or stop weewxd
 weectl extension list
 weectl extension uninstall <old-name>            # or delete ~/weewx-data/bin/user/ecowitt_http.py
-weectl extension install weewx-EcowittGateway-1.2.0.zip
+weectl extension install weewx-EcowittGateway-1.3.0.zip
 sudo systemctl start weewx
 ```
 
 ### Upgrading / removing
 
 These are the same as the Debian instructions above, without `sudo` on the `weectl` commands.
+
+---
+
+## C. Unattended (scripted) install
+
+Use this when the install has to run with nobody at the keyboard: a `vagrant up`, an Ansible play,
+cloud-init, or your own build script. You give the installer its answers in environment variables
+instead of typing them.
+
+### How it works
+
+The installer asks the same questions as an ordinary install (see
+[What the installer asks](#what-the-installer-asks)), and takes each answer like this:
+
+1. **If the question's `ECOWITT_*` variable is set,** it uses that value and doesn't ask. It prints
+   the question with the answer and `(from ECOWITT_...)`, so the install output is a record of what
+   was set. Passwords and keys are printed as `********`.
+2. **Otherwise, if there's no terminal** (as in a provisioning script) **or `ECOWITT_NO_PROMPT=yes`
+   is set,** it uses the default. On an upgrade or re-install the default is your current setting.
+3. **Otherwise** it asks you at the terminal as usual.
+
+So you only need variables for the answers that differ from the defaults. On a new install that's
+usually just the gateway address and how to use it:
+
+```bash
+ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver
+```
+
+Two more things are needed for a run with no questions at all:
+
+- **`--yes` on `weectl extension install`.** Without it `weectl` asks you to confirm the install.
+- **`ECOWITT_NO_PROMPT=yes` if the script runs at a terminal.** Without a terminal it isn't needed,
+  but it does no harm, so it's simplest to always set it.
+
+### Step 1: choose your answers
+
+| Variable | Values | Default if not set (new install) |
+|---|---|---|
+| `ECOWITT_IP_ADDRESS` | IP address, or `host:port` | none: `ip_address = replace_me` and nothing else changes. **Set this.** |
+| `ECOWITT_MODE` | `driver`, `service` or `skip` | `driver` when `ECOWITT_IP_ADDRESS` is set, otherwise `skip` |
+| `ECOWITT_POLL_INTERVAL` | seconds | `20` |
+| `ECOWITT_RAIN_SOURCE` | `both`, `tipping` or `piezo` | worked out from the paired gauges, else `tipping` (driver mode only) |
+| `ECOWITT_CATCHUP` | `either`, `device`, `net` or `none` | `either` |
+| `ECOWITT_API_KEY`, `ECOWITT_APP_KEY` | text | blank. Only needed for catchup from Ecowitt.net. |
+| `ECOWITT_SENSOR_MAP` | yes/no | yes: lock any multi-channel sensors found to their channels |
+| `ECOWITT_SHOW_ALL_BATT` | yes/no | no |
+| `ECOWITT_LOOP_ON_INIT` | yes/no | yes (driver mode only) |
+| `ECOWITT_LOOP_JSON` | yes/no | no |
+| `ECOWITT_LOOP_JSON_LOCATION` | `web`, `data`, `tmp` or `custom` | `web` |
+| `ECOWITT_LOOP_JSON_PATH` | folder or file path | none. Setting it on its own means `custom`. |
+| `ECOWITT_LOOP_JSON_UNITS` | `native`, `us`, `metric` or `metricwx` | `native` |
+| `ECOWITT_MQTT` | yes/no | no |
+| `ECOWITT_MQTT_HOST` | host name or IP address | `localhost` |
+| `ECOWITT_MQTT_PORT` | port | `1883`, or `8883` with TLS |
+| `ECOWITT_MQTT_TLS` | yes/no | no |
+| `ECOWITT_MQTT_USERNAME`, `ECOWITT_MQTT_PASSWORD` | text | blank. The password is only used with a username. |
+| `ECOWITT_MQTT_TOPIC` | text | `weewx/ecowitt` |
+| `ECOWITT_MQTT_FORMAT` | `json`, `individual` or `both` | `json` |
+| `ECOWITT_MQTT_UNITS` | `native`, `us`, `metric` or `metricwx` | `native` |
+| `ECOWITT_MQTT_RETAIN` | yes/no | no |
+| `ECOWITT_MQTT_CA_CERTS` | file path | blank (the system certificates) |
+| `ECOWITT_NO_PROMPT` | yes/no | no |
+
+- Yes/no values can be written `yes`/`no`, `y`/`n`, `true`/`false`, `on`/`off` or `1`/`0`, in any
+  case. Choice values (`driver`, `both`, …) are not case sensitive either.
+- The MQTT and `ecwLoop.json` variables are only used when `ECOWITT_MQTT` or `ECOWITT_LOOP_JSON` is
+  yes (or those features are already turned on).
+- `ECOWITT_RAIN_SOURCE` and `ECOWITT_LOOP_ON_INIT` only apply in driver mode.
+- Quote values that contain spaces or shell characters: `ECOWITT_MQTT_PASSWORD='p@ss word!'`.
+
+### Step 2: put the answers somewhere
+
+For one or two settings, put them on the command line (Step 3). For more, a settings file is easier
+to keep, and keeps passwords out of your shell history and out of a `Vagrantfile` you might share.
+Write one `NAME=value` per line:
+
+```bash
+# ecowitt.env
+ECOWITT_NO_PROMPT=yes
+ECOWITT_IP_ADDRESS=192.168.1.100
+ECOWITT_MODE=driver
+ECOWITT_RAIN_SOURCE=both
+ECOWITT_CATCHUP=device
+ECOWITT_LOOP_JSON=yes
+ECOWITT_LOOP_JSON_LOCATION=tmp
+ECOWITT_MQTT=yes
+ECOWITT_MQTT_HOST=192.168.1.20
+ECOWITT_MQTT_USERNAME=weewx
+ECOWITT_MQTT_PASSWORD='change-me'
+```
+
+If it holds a password, make it readable only by you: `chmod 600 ecowitt.env`.
+
+### Step 3: run the install
+
+**Debian / apt install (WeeWX runs as a service, `weectl` needs `sudo`)**
+
+On the command line:
+
+```bash
+sudo ECOWITT_NO_PROMPT=yes ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \
+     weectl extension install --yes weewx-EcowittGateway-1.3.0.zip
+sudo systemctl restart weewx
+```
+
+With a settings file:
+
+```bash
+sudo bash -c 'set -a; . ./ecowitt.env; set +a; weectl extension install --yes weewx-EcowittGateway-1.3.0.zip'
+sudo systemctl restart weewx
+```
+
+`set -a` exports every variable the file sets, so `weectl` can see them.
+
+> **`sudo` and variables:** `sudo` starts a clean environment, so
+> `export ECOWITT_IP_ADDRESS=…` followed by `sudo weectl …` **does not work**: the installer never
+> sees the variable and quietly uses the defaults. Put the variables after `sudo` on the same line,
+> or load them inside `sudo bash -c '…'`, as above. A script that already runs as root (a Vagrant
+> shell provisioner, cloud-init, Ansible with `become`) can use `export` as normal.
+
+**pip install (virtual environment, no `sudo`)**
+
+Call the virtual environment's own `weectl`; you don't need to activate it first:
+
+```bash
+ECOWITT_NO_PROMPT=yes ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \
+    ~/weewx-venv/bin/weectl extension install --yes weewx-EcowittGateway-1.3.0.zip
+
+# or with a settings file
+set -a; . ./ecowitt.env; set +a
+~/weewx-venv/bin/weectl extension install --yes weewx-EcowittGateway-1.3.0.zip
+```
+
+Add `--config=/path/to/weewx.conf` if your station data isn't in `~/weewx-data`. Then restart WeeWX.
+
+### Step 4: check the result
+
+The install output lists each answer that came from a variable:
+
+```
+Configuring weewx-EcowittGateway
+
+Gateway IP address, eg 192.168.1.100: 192.168.1.100  (from ECOWITT_IP_ADDRESS)
+    Found GW2000A_V3.1.4 at 192.168.1.100
+Use as the station driver, as a service alongside another driver, or skip: driver  (from ECOWITT_MODE)
+    Paired rain gauges: piezo and tipping
+Rain gauges to use: both  (from ECOWITT_RAIN_SOURCE)
+...
+Station driver set to EcowittGateway (user.weewx-EcowittGateway); archive records generated in software.
+```
+
+Then confirm it can reach the gateway, and look at the settings it wrote:
+
+```bash
+sudo weectl device --live-data                         # pip: ~/weewx-venv/bin/weectl device --live-data
+sudo sed -n '/^\[EcowittGateway\]/,/^\[[A-Za-z]/p' /etc/weewx/weewx.conf
+```
+
+In a script, test the exit status: `weectl` stops with a non-zero status if a variable is wrong (see
+*Troubleshooting* below), so `set -e` or `|| exit 1` stops the build there.
+
+### Complete examples
+
+**Vagrant: a new Debian VM with WeeWX and the driver, from `vagrant up`.** Put the zip (and
+`ecowitt.env`, if you use one) next to the `Vagrantfile`; Vagrant shares that folder as `/vagrant`.
+The WeeWX lines follow the [WeeWX Debian guide](https://weewx.com/docs/5.2/quickstarts/debian/).
+WeeWX's own package installs with its default answers (the Simulator driver), which the extension
+then replaces.
+
+```ruby
+Vagrant.configure("2") do |config|
+  config.vm.box = "debian/bookworm64"
+  config.vm.network "public_network"          # the VM must be able to reach the gateway
+
+  config.vm.provision "shell", inline: <<-SHELL
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+
+    # WeeWX from weewx.com's apt repository
+    apt-get update
+    apt-get install -y wget gnupg
+    wget -qO - https://weewx.com/keys.html | gpg --dearmor --yes --output /etc/apt/trusted.gpg.d/weewx.gpg
+    echo "deb [arch=all] https://weewx.com/apt/python3 buster main" > /etc/apt/sources.list.d/weewx.list
+    apt-get update
+    apt-get install -y weewx
+
+    # weewx-EcowittGateway, with no questions
+    export ECOWITT_NO_PROMPT=yes
+    export ECOWITT_IP_ADDRESS=192.168.1.100
+    export ECOWITT_MODE=driver
+    export ECOWITT_CATCHUP=device
+    # or keep the answers in a file:  set -a; . /vagrant/ecowitt.env; set +a
+    weectl extension install --yes /vagrant/weewx-EcowittGateway-1.3.0.zip
+
+    systemctl restart weewx
+  SHELL
+end
+```
+
+**Ansible**
+
+```yaml
+- name: Install weewx-EcowittGateway
+  become: true
+  ansible.builtin.command:
+    cmd: weectl extension install --yes /tmp/weewx-EcowittGateway-1.3.0.zip
+  environment:
+    ECOWITT_NO_PROMPT: "yes"
+    ECOWITT_IP_ADDRESS: "192.168.1.100"
+    ECOWITT_MODE: "driver"
+    ECOWITT_MQTT: "yes"
+    ECOWITT_MQTT_HOST: "192.168.1.20"
+    ECOWITT_MQTT_PASSWORD: "{{ vault_mqtt_password }}"
+  notify: Restart weewx
+```
+
+**Upgrading unattended.** Run the same command with the new zip. Every setting you don't give a
+variable for keeps its current value, so an upgrade normally needs no variables at all, only
+`ECOWITT_NO_PROMPT=yes` if it's run at a terminal:
+
+```bash
+sudo ECOWITT_NO_PROMPT=yes weectl extension install --yes weewx-EcowittGateway-<new version>.zip
+sudo systemctl restart weewx
+```
+
+To change one setting the same way, set only that variable, for example `ECOWITT_POLL_INTERVAL=30`.
+
+### Settings the installer doesn't ask about
+
+Options such as `log_next_update`, `ignore_no_signal`, `debug`, `max_tries`, `[[limits]]` or a
+`[[field_map_extensions]]` entry aren't installer questions. Set them after the install, before restarting WeeWX. WeeWX already
+includes the `configobj` module that reads and writes `weewx.conf` and keeps its comments, so a
+few lines of Python do it:
+
+```bash
+sudo python3 - /etc/weewx/weewx.conf <<'EOF'
+import sys, configobj
+conf = configobj.ConfigObj(sys.argv[1], encoding='utf-8')
+conf['EcowittGateway']['log_next_update'] = 'False'
+conf['EcowittGateway']['limits'] = {'outTemp': ['-50', '60'], 'windGust': ['', '75']}
+conf['debug'] = '1'
+conf.write()
+EOF
+```
+
+For a pip install, use `~/weewx-venv/bin/python3` and `~/weewx-data/weewx.conf` instead.
+
+### Troubleshooting
+
+| What you see | Why, and what to do |
+|---|---|
+| It still asks questions | It's running at a terminal. Set `ECOWITT_NO_PROMPT=yes`. If `weectl` asks to confirm the install, add `--yes`. |
+| It finishes, but `ip_address = replace_me` and the station driver hasn't changed | The installer didn't see your variables. Usually `export` followed by `sudo`: see the note in Step 3. Check for `(from ECOWITT_...)` in the output. |
+| `install.SettingError: ECOWITT_MODE='drvier' is not one of: driver, service, skip` | A value isn't valid. Every variable is checked before anything is changed, so `weewx.conf` hasn't been touched. Correct it and run the install again. |
+| `Ignoring unknown setting ECOWITT_IPADDRESS` | A misspelt variable name. It's ignored and the install carries on, so correct it and run the install again. |
+| `No response from a gateway at …` then `Using this address anyway` | The gateway couldn't be reached during the install, for example because the VM isn't on its network yet. The address is still saved, but the paired rain gauges and multi-channel sensors couldn't be read: set `ECOWITT_RAIN_SOURCE` yourself, and once the gateway can be reached run `weectl device --list-sensors` for a ready-made `[[sensor_map]]`. |
+| `... can't be used here: use one of net, none, either` | `ECOWITT_CATCHUP=device` with a GW1000/WH2650, which has no SD card. Use `net`, `none` or `either`. |
 
 ---
 

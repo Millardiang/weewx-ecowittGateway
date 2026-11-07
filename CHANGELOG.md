@@ -5,6 +5,80 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 
+## [1.3.0] – in development
+
+### Added
+
+- **Several gateways.** List them in `[[sources]]` and the driver (or the service) merges them into
+  one stream of loop packets, following the design of
+  [weewx-ecowitt-multi](https://github.com/mKainzbauer/weewx-ecowitt-multi) by mKainzbauer:
+  - each field comes from the first gateway in its priority order (`source_priority`, and
+    `[[priority]]` per field or `prefix*`) whose data is no older than `max_age` and has a value; a
+    reading dropped by `[[limits]]` falls back to the next gateway;
+  - each gateway is polled by its own thread and keeps its own rain and lightning counters; each
+    count is taken from one gateway at a time, so rain heard by two gateways isn't counted twice,
+    and the next gateway takes over if that one goes quiet. Unlike weewx-ecowitt-multi, the rain the
+    next gateway reported while waiting is added when it takes over, rather than lost;
+  - after an outage of every gateway, the driver holds back loop packets until they're back and then
+    restarts the engine so that catchup fills the outage (`gap_mode`, `max_gap_wait`,
+    `min_restart_interval`);
+  - catchup combines each gateway's history into `archive_interval` records and merges them by the
+    same priorities;
+  - each gateway inherits the section's settings and can override them (`[[sensor_map]]` is per
+    gateway); `host`/`port` and `history` from weewx-ecowitt-multi are accepted;
+  - `gateway_online_<name>` loop fields, `weectl device --sources`, `--source=NAME` for every other
+    command, and `debug = merge`.
+
+  With no `[[sources]]` section nothing changes.
+
+- `[[limits]]`: readings outside a minimum and maximum are dropped (set to `None`), in loop packets
+  and catchup records, for example `outTemp = -50, 60`. An optional third item gives the unit.
+- `ignore_no_signal` (default `False`): ignore the readings of a multi-channel sensor (WN31, WN34,
+  WN35, WH41, WH51, WH54, WH55) while the gateway reports its signal as 0. The log says when a sensor
+  starts and stops being ignored.
+- `gateway_online` loop field: `1` while the gateway is answering, `0` (service mode) when it hasn't
+  answered within `max_age`. Archived as an average it gives the fraction of time online, if you add
+  the column (`weectl database add-column gateway_online --type=REAL`).
+- Catchup checks: a warning when the catchup records' interval differs from `archive_interval`, and
+  one line after each catchup with the number of records and the time they cover.
+- `weectl device --sd-files`: the SD card, its logging interval and its history files.
+- `weectl device --catchup-dry-run [--since=DATE] [--catchup-source=either|device|net]`: the records
+  a catchup would fetch, without saving them.
+- A test suite (`tests/`, run with `python3 -m pytest tests`). The fake gateway it uses reads files
+  in the `--dump-api` format, so real gateway responses can be added as test data. See
+  DEVELOPMENT.md.
+
+### Fixed
+
+- SD card catchup: a file on the card whose name doesn't start with a year and month (such as
+  `log`) stopped the catchup with an error; such files are now skipped. Taken from
+  weewx-ecowitt-multi.
+- SD card catchup when `ip_address` includes a port (`192.168.1.100:8080`): the files are now read
+  from port 81 of that host, as they should be. Taken from weewx-ecowitt-multi.
+- Service mode: when the gateway was polled more than once between two loop packets (a main driver
+  with a long loop interval), only the last poll's rain was added to `t_rain`/`p_rain`; the rain from
+  the earlier polls was lost. Every poll's rain is now included.
+- Service mode: `t_rain` and `p_rain` were added in millimetres even when the loop packets were in
+  US units, so they were 25.4 times too large on a US-unit station. They are now converted.
+- A poll in which the gateway didn't report a rain total repeated the previous poll's rain, so it
+  could be counted twice. Such a poll now has no rain delta.
+
+### Changed
+
+- Service mode: the fields the driver works out itself (`wbgt`, `lightning_num`, `ws90_batt` and
+  the like) follow the same rules as the others: they're added only from fresh data and don't replace
+  the main driver's values.
+- The code for one gateway (connection, polling, sensor map, field map, rain and lightning counters,
+  catchup and online state) is now in one class, `GatewaySource`, which the driver and the service
+  each use once. Nothing changes in `weewx.conf`. Several gateways are built on it.
+
+### Upgrading
+
+- Nothing to do. `ignore_no_signal = False` and an empty `[[limits]]` section with examples are added
+  to `[EcowittGateway]` when you install over an existing version.
+- If you run the service on a US-unit station and archive `t_rain` or `p_rain`, the values recorded
+  before this version are 25.4 times too large.
+
 ## [1.2.0] – 6 November 2026
 
 ### Added
@@ -16,8 +90,9 @@ follow the scheme described in [VERSIONING.md](VERSIONING.md).
 - Scripted installs: every installer question can be answered with an `ECOWITT_*` environment
   variable (for example `ECOWITT_IP_ADDRESS`, `ECOWITT_MODE`, `ECOWITT_RAIN_SOURCE`), so an install
   can run end to end from Vagrant, Ansible or a script. `ECOWITT_NO_PROMPT=yes` stops all prompts
-  even at a terminal. Values are checked before `weewx.conf` is touched. See INSTALL.md,
-  *Scripted (unattended) install*.
+  even at a terminal. Values are checked before `weewx.conf` is touched, and a bad one stops the
+  install with a non-zero exit status. See INSTALL.md, *C. Unattended (scripted) install*, for a
+  step-by-step guide with Vagrant and Ansible examples.
 - `log_next_update` option (default `True`): set it to `False` to keep `debug = 1` without the
   `Next update in N seconds` line after every poll.
 - `--active-map` (also `weectl device --active-map`) lists only the field map entries the gateway

@@ -1,0 +1,108 @@
+VERSIONING
+==========
+
+weewx-EcowittGateway uses semantic versioning (<https://semver.org>) for the public version, and PEP
+440 for the version string in the code, so that Python tools and weectl extension list sort releases
+correctly.
+
+Version format
+==============
+
+    MAJOR.MINOR.PATCH[{a|b|rc}N]
+
+MAJOR
+    Increase it when…: A change breaks existing installs: a renamed config option, a removed or
+        renamed WeeWX field, or a change that needs a database schema change.
+    1.0.0 → 2.0.0
+
+MINOR
+    Increase it when…: Something is added and existing installs keep working: a new sensor, new
+        fields, new options or new commands.
+    0.1.0 → 0.2.0
+
+PATCH
+    Increase it when…: Bug fixes only, with no new fields or options.
+    0.1.0 → 0.1.1
+
+Pre-release
+    Increase it when…: Testing builds before a release: a = alpha (incomplete), b = beta (complete,
+        being tested), rc = release candidate (expected to be final). N counts up from 1.
+    1.1.0b1, 1.1.0b2, 1.1.0rc1, 1.1.0
+
+The betas before 1.0.0 (0.0.1b1 to 0.0.1b8) could contain small, clearly documented breaking
+changes, as semver allows. From 1.0.0 onwards the configuration options and WeeWX field names are
+frozen, and a breaking change needs a new MAJOR version. Configuration compatibility with
+ecowitt_http.py is kept for the whole 1.x series.
+
+Where the version is recorded
+=============================
+
+Each release must update these together:
+
+bin/user/weewx-EcowittGateway.py
+    Item: DRIVER_VERSION
+    PEP 440, e.g. 1.0.0 or 1.1.0b1
+
+bin/user/weewx-EcowittGateway.py
+    Item: Version: line in the header
+    human-readable, e.g. 1.0.0 or 1.1.0 beta 1
+
+install.py
+    Item: VERSION
+    PEP 440, the same as DRIVER_VERSION
+
+CHANGELOG.md
+    Item: a new ## [x.y.z] section
+    the Unreleased items moved under it, with the date
+
+Release package
+    Item: weewx-EcowittGateway-<version>.zip
+    e.g. weewx-EcowittGateway-1.0.0.zip
+
+You can check the installed version with any of these:
+
+    weectl extension list
+    python3 weewx-EcowittGateway.py --version
+
+It also appears in the WeeWX log at start-up (EcowittHttpDriver: version is 1.3.0).
+
+Release history and roadmap
+===========================
+
+1. 0.0.1b1 – 0.0.1b8 (24 September 2026): betas, with fixes and features found by testing.
+2. 1.0.0 (25 September 2026): first full release, identical in code to 0.0.1b8. From here the
+   configuration and field names are frozen, and breaking changes need a MAJOR version.
+3. 1.0.1 (18 October 2026): bug fix for weectl device --get-calibration.
+4. 1.0.2 (21 October 2026): bug fix so WeeWX retries, rather than stops, when the gateway is
+   unreachable at start-up.
+5. 1.1.0 (22 October 2026): new ws68_batt field, so a WS68's battery voltage is no longer reported
+   as ws80_batt.
+6. 1.1.1 (25 October 2026): ws68_batt removed again; a WS68's battery is reported in wh68_batt only,
+   and its voltage is still kept out of ws80_batt.
+7. 1.2.0 (6 November 2026): ws68_batt back as a field (no automatic database column), better WH68
+   battery state, scripted installs, log_next_update, --active-map, and long log lines split so
+   syslog doesn't cut them off.
+8. 1.3.0 (in development): a test suite; the per-gateway code moved into one part (GatewaySource)
+   ready for a multi-gateway mode; [[limits]], ignore_no_signal, gateway_online, catchup checks,
+   --sd-files and --catchup-dry-run; service-mode rain fixes; several gateways ([[sources]]),
+   following the design of weewx-ecowitt-multi.
+9. 1.x: new sensors and features (MINOR) and bug fixes (PATCH), with b/rc pre-releases for testing
+   where useful.
+
+Release checklist
+=================
+
+1. In CHANGELOG.md, replace in development in the version's heading with the release date, written
+   as day month year (e.g. 24 September 2026). Do the same in the release history below, and remove
+   (in development) from the README's version line and its Versioning section.
+2. Update DRIVER_VERSION, the header Version: line and install.py VERSION.
+3. Rebuild the plain-text copies of the documents: python3 tools/md_to_txt.py (each NAME.md has a
+   NAME.txt beside it; edit the .md files, never the .txt ones).
+4. Check the code: python3 -m pyflakes bin/user/weewx-EcowittGateway.py install.py, and run the
+   tests: python3 -m pytest tests (see DEVELOPMENT.md).
+5. Test on a scratch station: weectl extension install, weectl station reconfigure, weectl device
+   --live-data, then weectl extension uninstall.
+6. Build the package from the directory above weewx-EcowittGateway/:
+       zip -r weewx-EcowittGateway-<version>.zip weewx-EcowittGateway
+
+7. Tag the release in version control as v<version>, e.g. v1.0.0.

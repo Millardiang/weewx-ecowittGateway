@@ -10,7 +10,7 @@ Copyright (C) 2026 Ian Millard
 Derived from the original GW1000 and ecowitt_local_http.py drivers, which both carry the following notice:
     Copyright (C) 2024-25 Gary Roderick                 gjroderick<at>gmail.com
 
-The multi-gateway merge follows the design of weewx-ecowitt-multi:
+The multi-gateway merge section uses a similar design as weewx-ecowitt-multi:
     Copyright (C) 2026 mKainzbauer         https://github.com/mKainzbauer/weewx-ecowitt-multi
 
 This program is free software: you can redistribute it and/or modify it under

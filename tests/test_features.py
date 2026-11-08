@@ -143,3 +143,13 @@ def test_since_parsing(egw):
     assert parse('2026-11-05') == parse('2026-11-05 00:00') == parse('2026-11-05T00:00')
     with pytest.raises(ValueError):
         parse('yesterday')
+
+
+def test_active_map_command(egw, station, capsys):
+    direct(egw, station, active_map=True).display_active_field_map()
+    out = capsys.readouterr().out
+    assert 'outTemp: common_list.0x02.val' in out and 'ws90_sig: ws90.signal' in out
+    for absent in ('ws80_sig', 'ws85_sig', 'wh69_batt', 'wh31_ch2_sig', 'wh51_ch1_sig'):   # not paired
+        assert absent not in out
+    assert 'worked out by the driver' in out and 'wbgt' in out
+    assert '103 of the' in out

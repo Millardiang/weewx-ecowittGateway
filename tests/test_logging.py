@@ -66,3 +66,13 @@ def test_next_update_message_can_be_turned_off(egw, station, info_log, monkeypat
             assert any('Next update in' in m for m in info_log.messages) is expected
         finally:
             drv.closePort()
+
+
+def test_active_map_leaves_out_sensors_that_are_not_paired(egw, info_log):
+    weewx.debug = 1
+    c = common(egw)
+    info_log.clear()
+    # a gateway sends empty signal/battery fields for sensor slots with nothing paired
+    egw.GatewaySource.log_active_map(c, {'common_list.0x02.val': 1, 'ws80.signal': None, 'wn31.ch2.signal': None})
+    assert 'active field map (1 of' in info_log.messages[0]
+    assert 'ws80' not in info_log.text and 'wn31' not in info_log.text

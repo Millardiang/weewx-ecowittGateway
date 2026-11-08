@@ -5,6 +5,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 
+## [1.3.1] – 8 November 2026
+
+### Fixed
+
+- The active field map (`weectl device --active-map`, and the log with `debug = 1`) listed the
+  signal, RSSI and battery entries of sensors that aren't paired, because the gateway reports those
+  fields empty. Only entries with a value are listed now, so the map shows just the sensors the
+  gateway has found.
+
+### Changed
+
+- `--active-map` also lists the fields the driver works out itself (`wbgt`, `lightning_num`,
+  `t_rain`, `p_rain` and so on), which are in every loop packet but not in the field map.
+
 ## [1.3.0] – 7 November 2026
 
 ### Added
@@ -476,6 +490,7 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 |---|---|---|
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
+[1.3.1]: #131--8-november-2026
 [1.3.0]: #130--7-november-2026
 [1.2.0]: #120--6-november-2026
 [1.1.1]: #111--25-october-2026

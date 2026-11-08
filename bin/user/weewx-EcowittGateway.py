@@ -25,7 +25,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 1.3.0
+Version: 1.3.1
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -86,7 +86,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '1.3.0'
+DRIVER_VERSION = '1.3.1'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -1145,6 +1145,12 @@ class FieldLimits:
                 packet[field] = None
 
 
+def active_field_map(field_map, data):
+    """The entries of field_map the device is filling: its field is in data and has a value. (A gateway
+    also reports empty signal and battery fields for sensors that aren't paired; those are left out.)"""
+    return {w: s for w, s in field_map.items() if data.get(s) is not None}
+
+
 def no_signal_keys(data):
     """{(model, channel): [data keys]} for multi-channel sensors that are paired but report signal 0.
 
@@ -1640,7 +1646,7 @@ class GatewaySource:
         if not (self.debug.any or weewx.debug > 0):
             return
         field_map = self.mapper.field_map
-        active = {w: s for w, s in field_map.items() if s in data and w not in self.active_fields}
+        active = {w: s for w, s in active_field_map(field_map, data).items() if w not in self.active_fields}
         if not active:
             return
         if self.active_fields:
@@ -5151,11 +5157,20 @@ class DirectEcowittDevice:
         def run(driver):
             data = driver.collector.get_current_data()
             field_map = driver.mapper.field_map
-            active = {w: s for w, s in field_map.items() if s in data}
+            active = active_field_map(field_map, data)
             self.print_field_map(active, 'Ecowitt HTTP driver active field map (fields the device is reporting now):',
                                  'driver')
+            # fields the driver works out itself (rain deltas, wbgt ...), which aren't in the field map
+            packet, _ = driver.source.loop_packet(dict(data))
+            derived = sorted(f for f, v in packet.items()
+                             if f not in active and f not in ('dateTime', 'usUnits') and v is not None)
+            if derived:
+                print()
+                print('Also in each loop packet, worked out by the driver (rain and lightning are counted')
+                print('from the second poll on):')
+                print(textwrap.fill(', '.join(derived), 100, initial_indent='    ', subsequent_indent='    '))
             print()
-            print(f'{len(active)} of the {len(field_map)} field map entries are in use. Sensors that are')
+            print(f'{len(active)} of the {len(field_map)} field map entries are in use. Sensors that are not paired,')
             print('offline or still registering are not shown; --driver-map shows the full map.')
 
         self.run_driver(run)

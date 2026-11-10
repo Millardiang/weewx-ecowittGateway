@@ -5,6 +5,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 
+## [1.3.2] – 10 November 2026
+
+### Fixed
+
+- Several gateways: `rain` was counted about twice when WeeWX's default rule for calculating rain
+  (`[StdWXCalculate]` `[[Delta]]` `[[[rain]]] input = totalRain`) was still in `weewx.conf`. A merged
+  loop packet in which no new rain had been counted had `rain = None`, so WeeWX filled it in from the
+  change in `totalRain`, on top of the rain the driver counts. Such packets now have `rain = 0.0` (the
+  rain since the last count arrives with the next count), and the driver logs a warning if the rule
+  is there. `p_rain`, `t_rain` and one gateway were not affected. Reported by mKainzbauer.
+
+### Upgrading
+
+- With several gateways, check `weewx.conf` for `[StdWXCalculate]` `[[Delta]]` `[[[rain]]]` and
+  remove it. Archive records written by 1.3.0 or 1.3.1 with several gateways and that rule have
+  about twice the real rain.
+
 ## [1.3.1] – 8 November 2026
 
 ### Fixed
@@ -490,6 +507,7 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 |---|---|---|
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
+[1.3.2]: #132--10-november-2026
 [1.3.1]: #131--8-november-2026
 [1.3.0]: #130--7-november-2026
 [1.2.0]: #120--6-november-2026

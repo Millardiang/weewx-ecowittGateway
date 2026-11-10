@@ -41,7 +41,7 @@ weectl extension list
 python3 weewx-EcowittGateway.py --version
 ```
 
-It also appears in the WeeWX log at start-up (`EcowittHttpDriver: version is 1.3.1`).
+It also appears in the WeeWX log at start-up (`EcowittHttpDriver: version is 1.3.2`).
 
 ## Release history and roadmap
 
@@ -64,7 +64,8 @@ It also appears in the WeeWX log at start-up (`EcowittHttpDriver: version is 1.3
    several gateways (`[[sources]]`), following the design of weewx-ecowitt-multi.
 9. **1.3.1** (8 November 2026): the active field map leaves out sensors that aren't paired, and
    lists the fields the driver works out itself.
-10. **1.x:** new sensors and features (MINOR) and bug fixes (PATCH), with `b`/`rc` pre-releases for
+10. **1.3.2** (10 November 2026): several gateways no longer let WeeWX count rain a second time.
+11. **1.x:** new sensors and features (MINOR) and bug fixes (PATCH), with `b`/`rc` pre-releases for
     testing where useful.
 
 ## Release checklist

@@ -107,7 +107,7 @@ def test_merged_rain(egw):
         m.add('gw2', {'dateTime': ts + 1, 't_rain': d2, 'p_rain': d2}, {'t_rain', 'p_rain'})
     packet = m.merged(41)
     assert packet['t_rain'] == pytest.approx(0.8) and packet['rain'] == packet['p_rain'] == packet['hail']
-    assert m.merged(42)['t_rain'] is None                     # counted once only
+    assert m.merged(42)['t_rain'] == 0.0                      # counted once only (0.0, not None: see below)
 
 
 # -- outages ---------------------------------------------------------------------------------------
@@ -326,3 +326,37 @@ def test_outage_of_every_gateway_restarts_for_catchup(egw, two):
                 assert time.time() < 0, 'a loop packet was emitted during the outage'
     finally:
         drv.closePort()
+
+
+def test_weewx_delta_rule_cannot_add_rain_of_its_own(egw):
+    """1.3.1 reported rain twice with four gateways: merged packets with nothing new had rain = None,
+    so WeeWX's default [[Delta]] rule (rain from totalRain) filled them in on top of the counted rain."""
+    import weewx.wxxtypes
+    egw.define_units()
+    names = ['gw1', 'gw2', 'gw3', 'gw4']
+    m = egw.GatewayMerger(names, max_age=60)
+    trackers = {n: egw.DeltaTracker('rain', ('rain.0x13.val',)) for n in names}
+    delta_rule = weewx.wxxtypes.Delta({'rain': {'input': 'totalRain'}})
+    weewx_rain = counted = 0.0
+    polls = sorted((offset + period * k, n) for n, offset, period in
+                   (('gw1', 0, 20), ('gw2', 5, 20), ('gw3', 9, 21), ('gw4', 14, 19)) for k in range(30))
+    for ts, name in polls:
+        total = round(ts * 0.01, 1)                          # one gauge heard by every gateway
+        m.add(name, {'dateTime': ts, 't_rain': trackers[name].update({'rain.0x13.val': total}),
+                     'totalRain': total}, {'t_rain'})
+        packet = m.merged(ts)
+        counted += packet.get('t_rain') or 0.0
+        if packet.get('rain') is None and packet.get('totalRain') is not None:   # what StdWXCalculate does
+            packet['rain'] = delta_rule.get_scalar('rain', packet, None)[0]
+        weewx_rain += packet.get('rain') or 0.0
+    gauge_rise = round(polls[-1][0] * 0.01, 1) - round(polls[0][0] * 0.01, 1)
+    assert weewx_rain == pytest.approx(counted)               # 1.3.1: about twice as much
+    assert gauge_rise - 0.4 <= counted <= gauge_rise          # less only the rain since the last count
+
+
+def test_delta_rule_warning(egw, caplog):
+    egw.warn_about_delta({'StdWXCalculate': {'Delta': {'rain': {'input': 'totalRain'}}}}, {'sources': {'a': {}}})
+    assert '[[Delta]] has a rule for rain' in caplog.text
+    caplog.clear()
+    egw.warn_about_delta({'StdWXCalculate': {'Delta': {'rain': {'input': 'totalRain'}}}}, {'ip_address': 'x'})
+    assert caplog.text == ''

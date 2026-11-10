@@ -4,7 +4,7 @@ A [WeeWX](https://weewx.com) driver and service for Ecowitt gateways and console
 **local HTTP API**. There's no cloud dependency for live data, and the gateway doesn't need any
 custom-server or upload configuration.
 
-**Version:** 1.3.1 · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
+**Version:** 1.3.2 · **License:** GPL v3 or later · **Requires:** WeeWX 5.4.0 or later
 
 This driver should be considered a natural evolution of both the GW1000 driver and the
 `ecowitt_local_http` driver: it brings the GW1000/WH2650 (TCP API) and the newer HTTP API gateways
@@ -247,6 +247,11 @@ counted from one gateway at a time (the first in its priority order). If that ga
 `max_age` seconds, the next one takes over without counting any period twice. The rain it reported
 while waiting is added when it takes over, so a handover loses at most the part of one poll
 interval that overlaps.
+
+The driver supplies `rain` itself, so WeeWX mustn't calculate it as well. WeeWX's default
+`weewx.conf` has a rule that does, `[StdWXCalculate]` `[[Delta]]` `[[[rain]]] input = totalRain`.
+The installer removes it in driver mode, and with several gateways the driver logs a warning if it's
+still there. If you set up `[[sources]]` by hand, check for it and remove it.
 
 ### When every gateway is out of contact
 
@@ -832,7 +837,7 @@ responses as test data, and how the code is laid out.
 See **[VERSIONING.md](VERSIONING.md)**. In brief:
 
 - releases use semantic versioning, `MAJOR.MINOR.PATCH`, with PEP 440 labels for pre-releases (e.g. `1.1.0b1`);
-- the current release is 1.3.1; 1.0.0 was the first full release, following the 0.0.1 betas;
+- the current release is 1.3.2; 1.0.0 was the first full release, following the 0.0.1 betas;
 - from 1.0.0 the configuration options and WeeWX field names are frozen: a breaking change needs a
   new MAJOR version;
 - configuration compatibility with `ecowitt_http.py` is kept throughout 1.x.

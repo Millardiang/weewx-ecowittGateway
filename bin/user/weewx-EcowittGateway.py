@@ -25,7 +25,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 1.3.1
+Version: 1.3.2
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -86,7 +86,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '1.3.1'
+DRIVER_VERSION = '1.3.2'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -1363,7 +1363,10 @@ class GatewayMerger:
                     break
         for field in self.COUNTERS:
             if field in self.counted:
-                packet[field] = self.pending.pop(field, None)
+                # once a gateway is counting the field, nothing new since the last packet means 0, not
+                # unknown: with None, WeeWX's [[Delta]] rule (rain from totalRain) adds rain of its own
+                default = 0.0 if self.arbiter.provider.get(field) is not None else None
+                packet[field] = self.pending.pop(field, default)
         if 't_rain' in packet or 'p_rain' in packet:
             packet['hail'] = packet.get('p_rain')
             packet['rain'] = packet.get('p_rain') if self.rain_source == 'piezo' else packet.get('t_rain')
@@ -2085,7 +2088,17 @@ def std_archive_interval(config_dict):
     return weeutil.weeutil.to_int(config_dict.get('StdArchive', {}).get('archive_interval', 300))
 
 
+def warn_about_delta(config_dict, stn_dict):
+    """With several gateways, a [[Delta]] rule for rain lets WeeWX add rain of its own: say so."""
+    rules = config_dict.get('StdWXCalculate', {}).get('Delta', {})
+    fields = [f for f in ('rain', 'hail', 't_rain', 'p_rain') if f in rules]
+    if fields and stn_dict.get('sources'):
+        log.warning("[StdWXCalculate] [[Delta]] has a rule for %s. With several gateways the driver supplies "
+                    "it; remove the rule so that WeeWX can never count rain of its own as well.", ', '.join(fields))
+
+
 def loader(config_dict, engine):
+    warn_about_delta(config_dict, driver_config(config_dict))
     return EcowittHttpDriver(html_dir=html_root(config_dict), archive_interval=std_archive_interval(config_dict),
                              **driver_config(config_dict))
 

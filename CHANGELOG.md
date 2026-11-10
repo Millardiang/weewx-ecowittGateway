@@ -5,6 +5,32 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow the scheme described in [VERSIONING.md](VERSIONING.md).
 
 
+## [1.3.3] – 10 November 2026
+
+### Fixed
+
+- `lightningcount` was archived as the strike count of the last loop packet of each archive interval
+  (usually 0), because its `[Accumulator]` entry kept the last value. It is a per-packet count, so it
+  is now totalled. `lightning_strike_count` was not affected.
+- The installer's `[Accumulator]` entries matched the driver's fields badly: 72 of them were for
+  names the driver never produces (from older drivers' naming, such as `pm2_51_24hav`,
+  `24havpm255` and `wh31_ch1_batt`), while most battery states and all 24-hour averages and AQIs that
+  it does produce had none, so WeeWX averaged them. The entries now match the driver's fields.
+  Installing over an earlier version, or `weectl station reconfigure`, removes the unused entries
+  (only those still as they were added) and corrects `lightningcount`.
+
+### Changed
+
+- Without a WH45/WH46, the standard `pm2_5` field is filled from the WH41/WH43 PM2.5 sensor on
+  channel 1, so one PM2.5 sensor appears in the standard skins with no database changes. A WH45/WH46
+  still takes precedence, and the fallback is off if `pm2_5` or `pm25_1` is mapped to something else.
+  Reported by John Burricelli.
+
+### Added
+
+- README: which fields are stored in the database, how to add columns, the PM2.5 sensors' field
+  names, and what the `[Accumulator]` entries are for.
+
 ## [1.3.2] – 10 November 2026
 
 ### Fixed
@@ -507,6 +533,7 @@ First release of weewx-EcowittGateway (0.0.1b1), a compact rewrite based on Gary
 |---|---|---|
 | 0.1.x | 10 – 25 July 2025 | First releases, based on Gary Roderick's 0.1.0a28 |
 
+[1.3.3]: #133--10-november-2026
 [1.3.2]: #132--10-november-2026
 [1.3.1]: #131--8-november-2026
 [1.3.0]: #130--7-november-2026

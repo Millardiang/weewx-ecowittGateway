@@ -140,7 +140,7 @@ see [C. Unattended (scripted) install](#c-unattended-scripted-install).
 
 ```bash
 # 1. Install the extension and answer the prompts
-sudo weectl extension install weewx-EcowittGateway-1.3.2.zip
+sudo weectl extension install weewx-EcowittGateway-1.3.3.zip
 
 # 2. Check it can talk to the gateway
 sudo weectl device --live-data
@@ -153,7 +153,7 @@ sudo journalctl -u weewx -f
 When it's working, the log shows lines like:
 
 ```
-EcowittHttpDriver: version is 1.3.2
+EcowittHttpDriver: version is 1.3.3
      device IP address is 192.168.1.100
 EcowittHttpCollector startup
 Using 'rain.0x13.val' for rain total
@@ -165,7 +165,7 @@ Using 'rain.0x13.val' for rain total
 sudo systemctl stop weewx
 sudo weectl extension list                       # note the old extension's name
 sudo weectl extension uninstall <old-name>       # or delete /etc/weewx/bin/user/ecowitt_http.py
-sudo weectl extension install weewx-EcowittGateway-1.3.2.zip
+sudo weectl extension install weewx-EcowittGateway-1.3.3.zip
 sudo systemctl start weewx
 ```
 
@@ -226,7 +226,7 @@ source ~/weewx-venv/bin/activate
 source ~/weewx-venv/bin/activate
 
 # 1. Install the extension and answer the prompts
-weectl extension install weewx-EcowittGateway-1.3.2.zip
+weectl extension install weewx-EcowittGateway-1.3.3.zip
 
 # 2. Check it can talk to the gateway
 weectl device --live-data
@@ -248,7 +248,7 @@ source ~/weewx-venv/bin/activate
 sudo systemctl stop weewx                        # or stop weewxd
 weectl extension list
 weectl extension uninstall <old-name>            # or delete ~/weewx-data/bin/user/ecowitt_http.py
-weectl extension install weewx-EcowittGateway-1.3.2.zip
+weectl extension install weewx-EcowittGateway-1.3.3.zip
 sudo systemctl start weewx
 ```
 
@@ -356,14 +356,14 @@ On the command line:
 
 ```bash
 sudo ECOWITT_NO_PROMPT=yes ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \
-     weectl extension install --yes weewx-EcowittGateway-1.3.2.zip
+     weectl extension install --yes weewx-EcowittGateway-1.3.3.zip
 sudo systemctl restart weewx
 ```
 
 With a settings file:
 
 ```bash
-sudo bash -c 'set -a; . ./ecowitt.env; set +a; weectl extension install --yes weewx-EcowittGateway-1.3.2.zip'
+sudo bash -c 'set -a; . ./ecowitt.env; set +a; weectl extension install --yes weewx-EcowittGateway-1.3.3.zip'
 sudo systemctl restart weewx
 ```
 
@@ -381,11 +381,11 @@ Call the virtual environment's own `weectl`; you don't need to activate it first
 
 ```bash
 ECOWITT_NO_PROMPT=yes ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \
-    ~/weewx-venv/bin/weectl extension install --yes weewx-EcowittGateway-1.3.2.zip
+    ~/weewx-venv/bin/weectl extension install --yes weewx-EcowittGateway-1.3.3.zip
 
 # or with a settings file
 set -a; . ./ecowitt.env; set +a
-~/weewx-venv/bin/weectl extension install --yes weewx-EcowittGateway-1.3.2.zip
+~/weewx-venv/bin/weectl extension install --yes weewx-EcowittGateway-1.3.3.zip
 ```
 
 Add `--config=/path/to/weewx.conf` if your station data isn't in `~/weewx-data`. Then restart WeeWX.
@@ -447,7 +447,7 @@ Vagrant.configure("2") do |config|
     export ECOWITT_MODE=driver
     export ECOWITT_CATCHUP=device
     # or keep the answers in a file:  set -a; . /vagrant/ecowitt.env; set +a
-    weectl extension install --yes /vagrant/weewx-EcowittGateway-1.3.2.zip
+    weectl extension install --yes /vagrant/weewx-EcowittGateway-1.3.3.zip
 
     systemctl restart weewx
   SHELL
@@ -460,7 +460,7 @@ end
 - name: Install weewx-EcowittGateway
   become: true
   ansible.builtin.command:
-    cmd: weectl extension install --yes /tmp/weewx-EcowittGateway-1.3.2.zip
+    cmd: weectl extension install --yes /tmp/weewx-EcowittGateway-1.3.3.zip
   environment:
     ECOWITT_NO_PROMPT: "yes"
     ECOWITT_IP_ADDRESS: "192.168.1.100"

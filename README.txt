@@ -5,7 +5,7 @@ A WeeWX (https://weewx.com) driver and service for Ecowitt gateways and consoles
 local HTTP API. There's no cloud dependency for live data, and the gateway doesn't need any
 custom-server or upload configuration.
 
-Version: 1.3.2 · License: GPL v3 or later · Requires: WeeWX 5.4.0 or later
+Version: 1.3.3 · License: GPL v3 or later · Requires: WeeWX 5.4.0 or later
 
 This driver should be considered a natural evolution of both the GW1000 driver and the
 ecowitt_local_http driver: it brings the GW1000/WH2650 (TCP API) and the newer HTTP API gateways and
@@ -809,6 +809,50 @@ Gateway field names follow the API layout, for example:
 
 Use --live-data to see the fields your own gateway provides.
 
+Storing fields in the database
+------------------------------
+
+Every mapped field is in the loop packets (and in ecwLoop.json and MQTT), but WeeWX only stores a
+field in the archive, and so only shows it in reports and graphs, if the database has a column for
+it. The standard WeeWX database (wview_extended) has columns for the common fields, such as outTemp,
+rain, pm2_5, pm1_0, pm10_0, co2, soilMoist1–4 and batteryStatus1–8. Most Ecowitt-specific fields
+need a column added. To add one, stop WeeWX, then:
+
+    weectl database add-column pm25_1 --type=REAL
+    weectl database add-column pm25_avg_24h_ch1 --type=REAL
+
+Then add the field to your skin. Run weectl device --active-map to see the names of the fields your
+sensors fill.
+
+PM2.5 and air-quality sensors
+-----------------------------
+
+WH45 / WH46 (indoor CO2 and particulates)
+    pm2_5, pm1_0, pm4_0, pm10_0, co2, and their 24-hour averages and AQIs (pm25_24h_co2,
+    pm25_RealAQI_co2 …)
+
+WH41 / WH43 (PM2.5), channel n = 1–4
+    pm25_n, pm25_avg_24h_chn, pm25_RealAQI_chn, pm25_AQI_24h_chn, pm25_Battn
+
+Of these, only pm2_5, pm1_0, pm10_0 and co2 have columns in the standard database. Without a
+WH45/WH46, pm2_5 is filled from the WH41/WH43 on channel 1, so one PM2.5 sensor shows up in the
+standard skins with no database changes. To store more channels, add columns for them (see above).
+To put a different channel in pm2_5:
+
+    [EcowittGateway]
+        [[field_map_extensions]]
+            pm2_5 = ch_pm25.2.PM25          # the WH41 on channel 2
+
+The [Accumulator] section
+-------------------------
+
+The installer adds an [Accumulator] entry for each field that shouldn't be averaged over an archive
+interval: counts (t_rain, lightning_strike_count …) are totalled, and battery states, running
+totals, 24-hour averages and AQIs keep their last value. Entries for fields you don't have do no
+harm. Versions before 1.3.3 also added entries for names that this driver never produces (such as
+pm2_51_24hav and wh31_ch1_batt); installing 1.3.3 or later, or running weectl station reconfigure,
+removes them.
+
 Checking readings: limits and lost sensors
 ==========================================
 
@@ -995,7 +1039,7 @@ See VERSIONING.md. In brief:
 
 - releases use semantic versioning, MAJOR.MINOR.PATCH, with PEP 440 labels for pre-releases (e.g.
   1.1.0b1);
-- the current release is 1.3.2; 1.0.0 was the first full release, following the 0.0.1 betas;
+- the current release is 1.3.3; 1.0.0 was the first full release, following the 0.0.1 betas;
 - from 1.0.0 the configuration options and WeeWX field names are frozen: a breaking change needs a
   new MAJOR version;
 - configuration compatibility with ecowitt_http.py is kept throughout 1.x.

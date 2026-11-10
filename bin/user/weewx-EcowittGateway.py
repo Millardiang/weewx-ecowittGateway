@@ -25,7 +25,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 1.3.2
+Version: 1.3.3
 
 Requires WeeWX 5.4.0 or later. Install in the WeeWX user directory and
 reference it from weewx.conf:
@@ -86,7 +86,7 @@ def timestamp_to_string(ts):
 
 DRIVER_NAME = 'EcowittGateway'
 LEGACY_SECTIONS = ('EcowittHttp',)  # section names used by earlier versions and ecowitt_http.py
-DRIVER_VERSION = '1.3.2'
+DRIVER_VERSION = '1.3.3'
 DRIVER_MODULE = 'weewx-EcowittGateway'
 MIN_WEEWX_VERSION = (5, 4, 0)
 
@@ -1601,6 +1601,10 @@ class GatewaySource:
         self.reported = set()
         self.active_fields = set()
         self.limits = FieldLimits(config.get('limits'), label)
+        # pm2_5 (a standard WeeWX column) normally comes from a WH45/WH46; with none, from the WH41/WH43 on
+        # channel 1, unless pm2_5 or pm25_1 have been mapped to something else
+        fmap = self.mapper.field_map
+        self.pm25_fallback = fmap.get('pm2_5') == 'co2.PM25' and fmap.get('pm25_1') == 'ch_pm25.1.PM25'
         self.ignore_no_signal = to_bool(config.get('ignore_no_signal', False))
         self.no_signal = set()
         if self.ignore_no_signal:
@@ -1710,8 +1714,14 @@ class GatewaySource:
         mapped = self.mapper.map_data(data)
         packet.update(mapped)
         self.use_piezo_rate(data, packet)
+        self.fill_pm25(packet)
         self.limits.apply(packet)
         return packet, mapped
+
+    def fill_pm25(self, packet):
+        """pm2_5 from the channel 1 PM2.5 sensor when there is no WH45/WH46 reading."""
+        if self.pm25_fallback and packet.get('pm2_5') is None and packet.get('pm25_1') is not None:
+            packet['pm2_5'] = packet['pm25_1']
 
     def drop_no_signal(self, data):
         """Remove the readings of multi-channel sensors whose signal is 0 (ignore_no_signal)."""
@@ -1814,6 +1824,7 @@ class GatewaySource:
                 log.info('Archive rec data %s', rec)
             record.update(self.mapper.map_data(rec))
             self.use_piezo_rate(rec, record)
+            self.fill_pm25(record)
             self.limits.apply(record)
             yield record
 
@@ -2256,22 +2267,79 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
 # ---------------------------------------------------------------------------
 
 _EXTRACTORS = {
-    'sum': ('lightning_strike_count', 'lightning_noise_count', 't_rain', 'p_rain', 'hail'),
+    'sum': ('lightning_strike_count', 't_rain', 'p_rain', 'hail', 'lightningcount'),
     'max': ('rainRate', 'rrain_piezo', 'p_rainrate'),
-    'last': ('model', 'stationtype', 'apName', *_rng('gain{}', 5, 0), 'lightning_distance',
-             'lightning_last_det_time', 'lightningcount', 'maxdailygust', 'daymaxwind', 'windspdmph_avg10m',
-             'winddir_avg10m', 'stormRain', 'hourRain', 'dayRain', 'weekRain', 'monthRain', 'yearRain', 'totalRain',
-             'erain_piezo', 'hrain_piezo', 'drain_piezo', 'wrain_piezo', 'mrain_piezo', 'yrain_piezo',
-             'totalRain_piezo', 'p_eventrain', 'p_hourrain', 'p_dayrain', 'p_weekrain', 'p_monthrain', 'p_yearrain',
-             'dayHail', 'vpd', *_rng('depth_ch{}', 4), *_rng('pm2_5{}_24hav', 4), '24havpm255',
-             *_rng('pm2_5{}_24h_avg', 5), 'pm10_24h_avg', 'co2_24h_avg', 'wh25_batt', 'wh26_batt',
-             *_rng('wh31_ch{}_batt', 8), *_rng('wn35_ch{}_batt', 8), 'wh40_batt', 'wn20_batt', 'wn38_batt',
-             *_rng('wh41_ch{}_batt', 4), 'wh45_batt', *_rng('wh51_ch{}_batt', 16), *_rng('wh55_ch{}_batt', 4),
-             'wh57_batt', 'wh65_batt', 'wh68_batt', 'wh69_batt', 'ws68_batt', 'ws80_batt', 'ws85_batt',
-             'ws90_batt', 'ws85cap_volt', 'ws90cap_volt', 'ws1900batt', 'console_batt', 'consoleext_batt',
-             *_rng('ldsbatt{}', 4)),
+    'last': ('gain0', 'gain1', 'gain2', 'gain3', 'gain4', 'maxdailygust', 'hourRain',
+             'dayRain', 'weekRain', 'monthRain', 'yearRain', 'totalRain', 'erain_piezo', 'hrain_piezo',
+             'drain_piezo', 'wrain_piezo', 'mrain_piezo', 'yrain_piezo', 'vpd', 'depth_ch1',
+             'depth_ch2', 'depth_ch3', 'depth_ch4', 'wh25_batt', 'wh26_batt', 'wh40_batt', 'wn20_batt',
+             'wn38_batt', 'wh68_batt', 'wh69_batt', 'ws68_batt', 'ws80_batt', 'ws85_batt', 'ws90_batt',
+             'ws85cap_volt', 'ws90cap_volt', 'ws1900batt', 'console_batt', 'consoleext_batt',
+             'ldsbatt1', 'ldsbatt2', 'ldsbatt3', 'ldsbatt4', 'batteryStatus1', 'batteryStatus2',
+             'batteryStatus3', 'batteryStatus4', 'batteryStatus5', 'batteryStatus6', 'batteryStatus7',
+             'batteryStatus8', 'bgtbatt', 'co2_24h', 'co2_Batt', 'co2in_24h', 'consBatteryVoltage',
+             'consolebattp', 'hailBatteryStatus', 'inTempBatteryStatus', 'leafWetBatt1', 'leafWetBatt2',
+             'leafWetBatt3', 'leafWetBatt4', 'leafWetBatt5', 'leafWetBatt6', 'leafWetBatt7',
+             'leafWetBatt8', 'leak_Batt1', 'leak_Batt2', 'leak_Batt3', 'leak_Batt4', 'lightning_Batt',
+             'lightning_disturber_count', 'outTempBatteryStatus', 'piezorain_batt', 'pm1_24h_co2',
+             'pm1_24hAQI_co2', 'pm1_RealAQI_co2', 'pm4_24h_co2', 'pm4_24hAQI_co2', 'pm4_RealAQI_co2',
+             'pm10_24h_co2', 'pm10_24hAQI_co2', 'pm10_RealAQI_co2', 'pm25_24h_co2', 'pm25_24hAQI_co2',
+             'pm25_AQI_24h_ch1', 'pm25_AQI_24h_ch2', 'pm25_AQI_24h_ch3', 'pm25_AQI_24h_ch4',
+             'pm25_avg_24h_ch1', 'pm25_avg_24h_ch2', 'pm25_avg_24h_ch3', 'pm25_avg_24h_ch4',
+             'pm25_Batt1', 'pm25_Batt2', 'pm25_Batt3', 'pm25_Batt4', 'pm25_RealAQI_ch1',
+             'pm25_RealAQI_ch2', 'pm25_RealAQI_ch3', 'pm25_RealAQI_ch4', 'pm25_RealAQI_co2',
+             'rain_batt', 'rainBatteryStatus', 'soilMoistBatt1', 'soilMoistBatt1s', 'soilMoistBatt2',
+             'soilMoistBatt2s', 'soilMoistBatt3', 'soilMoistBatt3s', 'soilMoistBatt4',
+             'soilMoistBatt4s', 'soilMoistBatt5', 'soilMoistBatt5s', 'soilMoistBatt6',
+             'soilMoistBatt6s', 'soilMoistBatt7', 'soilMoistBatt7s', 'soilMoistBatt8',
+             'soilMoistBatt8s', 'soilMoistBatt9', 'soilMoistBatt9s', 'soilMoistBatt10',
+             'soilMoistBatt10s', 'soilMoistBatt11', 'soilMoistBatt11s', 'soilMoistBatt12',
+             'soilMoistBatt12s', 'soilMoistBatt13', 'soilMoistBatt13s', 'soilMoistBatt14',
+             'soilMoistBatt14s', 'soilMoistBatt15', 'soilMoistBatt15s', 'soilMoistBatt16',
+             'soilMoistBatt16s', 'soilTempBatt1', 'soilTempBatt1s', 'soilTempBatt2', 'soilTempBatt2s',
+             'soilTempBatt3', 'soilTempBatt3s', 'soilTempBatt4', 'soilTempBatt4s', 'soilTempBatt5',
+             'soilTempBatt5s', 'soilTempBatt6', 'soilTempBatt6s', 'soilTempBatt7', 'soilTempBatt7s',
+             'soilTempBatt8', 'soilTempBatt8s', 'wh80_batt', 'wh85_batt', 'wh90_batt',
+             'windBatteryStatus', 'wn32_batt', 'wn32p_batt', 'wn64_batt', 'wn64batt', 'wqt01_batt',
+             'wqt01batt', 'ws1800batt', 'ws6006batt', 'ws6210_batt'),
 }
-_FIRSTLAST = ('model', 'stationtype', 'apName')
+_FIRSTLAST = ('stationtype', 'apName')
+# accumulator entries added by 1.3.2 and earlier for fields the driver never produces; removed on upgrade
+_STALE_EXTRACTORS = {
+    'sum': ('lightning_noise_count',),
+    'last': ('24havpm255', 'co2_24h_avg', 'dayHail', 'daymaxwind', 'gain5', 'lightning_distance',
+             'lightning_last_det_time', 'p_dayrain', 'p_eventrain', 'p_hourrain', 'p_monthrain',
+             'p_weekrain', 'p_yearrain', 'pm10_24h_avg', 'pm2_51_24h_avg', 'pm2_51_24hav',
+             'pm2_52_24h_avg', 'pm2_52_24hav', 'pm2_53_24h_avg', 'pm2_53_24hav', 'pm2_54_24h_avg',
+             'pm2_54_24hav', 'pm2_55_24h_avg', 'stormRain', 'totalRain_piezo', 'wh31_ch1_batt',
+             'wh31_ch2_batt', 'wh31_ch3_batt', 'wh31_ch4_batt', 'wh31_ch5_batt', 'wh31_ch6_batt',
+             'wh31_ch7_batt', 'wh31_ch8_batt', 'wh41_ch1_batt', 'wh41_ch2_batt', 'wh41_ch3_batt',
+             'wh41_ch4_batt', 'wh45_batt', 'wh51_ch10_batt', 'wh51_ch11_batt', 'wh51_ch12_batt',
+             'wh51_ch13_batt', 'wh51_ch14_batt', 'wh51_ch15_batt', 'wh51_ch16_batt', 'wh51_ch1_batt',
+             'wh51_ch2_batt', 'wh51_ch3_batt', 'wh51_ch4_batt', 'wh51_ch5_batt', 'wh51_ch6_batt',
+             'wh51_ch7_batt', 'wh51_ch8_batt', 'wh51_ch9_batt', 'wh55_ch1_batt', 'wh55_ch2_batt',
+             'wh55_ch3_batt', 'wh55_ch4_batt', 'wh57_batt', 'wh65_batt', 'winddir_avg10m',
+             'windspdmph_avg10m', 'wn35_ch1_batt', 'wn35_ch2_batt', 'wn35_ch3_batt', 'wn35_ch4_batt',
+             'wn35_ch5_batt', 'wn35_ch6_batt', 'wn35_ch7_batt', 'wn35_ch8_batt'),
+}
+
+def tidy_accumulator(config_dict):
+    """Remove the [Accumulator] entries 1.3.2 and earlier added for fields the driver never produces
+    (only those still as they were added), and total lightningcount over each archive interval instead
+    of keeping its last value. Returns the names removed."""
+    accum = config_dict.get('Accumulator')
+    if not hasattr(accum, 'keys'):
+        return []
+    removed = []
+    stale = {f: {'extractor': x} for x, fields in _STALE_EXTRACTORS.items() for f in fields}
+    stale['model'] = {'accumulator': 'firstlast', 'extractor': 'last'}
+    for field, entry in stale.items():
+        if hasattr(accum.get(field), 'keys') and dict(accum[field]) == entry:
+            del accum[field]
+            removed.append(field)
+    if hasattr(accum.get('lightningcount'), 'keys') and dict(accum['lightningcount']) == {'extractor': 'last'}:
+        accum['lightningcount']['extractor'] = 'sum'     # it is a per-packet count of strikes
+    return removed
 
 
 class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
@@ -2463,6 +2531,9 @@ class EcowittHttpDriverConfEditor(weewx.drivers.AbstractConfEditor):
         accum = {f: {'extractor': x} for x, fields in _EXTRACTORS.items() for f in fields}
         for f in _FIRSTLAST:
             accum[f] = {'accumulator': 'firstlast', 'extractor': 'last'}
+        removed = tidy_accumulator(config_dict)
+        if removed:
+            print(f'Removed {len(removed)} unused accumulator entries.')
         accum_config = configobj.ConfigObj({'Accumulator': accum})
         accum_config.merge(config_dict)
         config_dict.merge(accum_config)

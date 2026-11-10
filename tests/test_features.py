@@ -153,3 +153,31 @@ def test_active_map_command(egw, station, capsys):
         assert absent not in out
     assert 'worked out by the driver' in out and 'wbgt' in out
     assert '103 of the' in out
+
+
+def test_pm2_5_from_the_channel_1_sensor_without_a_wh45(egw, station, gateway):
+    gateway.responses['get_livedata_info'].pop('co2')            # no WH45/WH46
+    drv = egw.EcowittHttpDriver(**station)
+    try:
+        packet = next_packet(drv.genLoopPackets())
+        assert packet['pm25_1'] == 6.0 and packet['pm2_5'] == 6.0
+    finally:
+        drv.closePort()
+
+
+def test_pm2_5_stays_with_the_wh45(egw, station):
+    drv = egw.EcowittHttpDriver(**station)
+    try:
+        packet = next_packet(drv.genLoopPackets())
+        assert packet['pm2_5'] == 4.0 and packet['pm25_1'] == 6.0
+    finally:
+        drv.closePort()
+
+
+def test_pm2_5_fallback_off_when_remapped(egw, station, gateway):
+    gateway.responses['get_livedata_info'].pop('co2')
+    drv = egw.EcowittHttpDriver(**{**station, 'field_map_extensions': {'pm2_5': 'ch_pm25.2.PM25'}})
+    try:
+        assert next_packet(drv.genLoopPackets()).get('pm2_5') is None   # channel 2 has no sensor
+    finally:
+        drv.closePort()

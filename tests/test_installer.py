@@ -107,10 +107,51 @@ def test_legacy_section_is_moved(monkeypatch):
 
 def test_extractors_match_the_driver():
     from conftest import egw_module
-    driver = {f: x for x, fields in egw_module._EXTRACTORS.items() for f in fields}
-    installer = {f: x for x, fields in install.EXTRACTORS.items() for f in fields}
-    installer.update({f: 'last' for f in install.FIRSTLAST})     # firstlast accumulators, 'last' extractor
-    assert driver == installer
+    assert {x: tuple(f) for x, f in install.EXTRACTORS.items()} == egw_module._EXTRACTORS
+    assert tuple(install.FIRSTLAST) == egw_module._FIRSTLAST
+    assert {x: tuple(f) for x, f in install.STALE_EXTRACTORS.items()} == egw_module._STALE_EXTRACTORS
+
+
+def test_every_accumulator_entry_is_a_field_the_driver_produces():
+    """1.3.2 and earlier had 72 entries for names from older drivers (pm2_51_24hav, wh31_ch1_batt ...)."""
+    from conftest import egw_module as egw
+    produced = set()
+    for options in ({}, {'wn32_indoor': True, 'wn32_outdoor': True}):
+        produced |= set(egw.HttpMapper(**options).field_map)
+    produced |= {'t_rain', 'p_rain', 'hail', 'lightning_num', 'wbgt', 'ws85_batt', 'ws90_batt', 'ws85cap_volt',
+                 'ws90cap_volt', 'gateway_online', *(f'soilMoistBatt{n}' for n in range(1, 17))}
+    entries = {f for fields in install.EXTRACTORS.values() for f in fields} | set(install.FIRSTLAST)
+    assert sorted(entries - produced) == []
+    assert 'lightningcount' in install.EXTRACTORS['sum']           # a per-packet count of strikes
+    for field in ('pm25_avg_24h_ch1', 'pm25_AQI_24h_ch1', 'batteryStatus1', 'pm25_Batt1'):
+        assert field in install.EXTRACTORS['last']
+
+
+def test_upgrade_tidies_the_accumulator():
+    conf = run(WEEWX_CONF + """
+[Accumulator]
+    [[pm2_51_24hav]]
+        extractor = last
+    [[wh31_ch1_batt]]
+        extractor = last
+    [[lightning_noise_count]]
+        extractor = sum
+    [[model]]
+        accumulator = firstlast
+        extractor = last
+    [[lightningcount]]
+        extractor = last
+    [[stormRain]]
+        extractor = max
+    [[myOwnField]]
+        extractor = last
+""")
+    accum = conf['Accumulator']
+    for gone in ('pm2_51_24hav', 'wh31_ch1_batt', 'lightning_noise_count', 'model'):
+        assert gone not in accum
+    assert accum['lightningcount']['extractor'] == 'sum'
+    assert accum['stormRain']['extractor'] == 'max'               # changed by the user: kept
+    assert accum['myOwnField']['extractor'] == 'last'
 
 
 def test_reconfigure_without_prompts_keeps_the_settings(monkeypatch, gateway):

@@ -10,6 +10,9 @@ Copyright (C) 2026 Ian Millard
 Derived from the original GW1000 and ecowitt_local_http.py drivers, which both carry the following notice:
     Copyright (C) 2024-25 Gary Roderick                 gjroderick<at>gmail.com
 
+Contains some elements of Werner Krenn fork of the original Gary Roderick's code started July 2025
+(C) 2025-2026 Werner Krennhttps://github.com/WernerKr/Ecowitt-or-DAVIS-stations-and-Season-skin/tree/main/ecowitt_http    
+
 The multi-gateway merge follows the design of weewx-ecowitt-multi:
     Copyright (C) 2026 mKainzbauer         https://github.com/mKainzbauer/weewx-ecowitt-multi
 

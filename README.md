@@ -10,6 +10,9 @@ This driver should be considered a natural evolution of both the GW1000 driver a
 `ecowitt_local_http` driver: it brings the GW1000/WH2650 (TCP API) and the newer HTTP API gateways
 and consoles together in a single driver.
 
+Contains some elements of Werner Krenn fork of the original Gary Roderick's code started July 2025
+(C) 2025-2026 Werner Krennhttps://github.com/WernerKr/Ecowitt-or-DAVIS-stations-and-Season-skin/tree/main/ecowitt_http    
+
 It is a compact rewrite of `ecowitt_http.py`. It keeps the same
 configuration, field names and command-line tools, fixes a number of bugs and is about 75% smaller.
 See [CHANGELOG.md](CHANGELOG.md).

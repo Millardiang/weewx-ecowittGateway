@@ -515,6 +515,7 @@ SETTINGS = {
     'SENSOR_MAP': 'bool',
     'SHOW_ALL_BATT': 'bool',
     'RADIATION': 'bool',
+    'MORE_GATEWAYS': 'gateways',
     'LOOP_ON_INIT': 'bool',
     'LOOP_JSON': 'bool',
     'LOOP_JSON_LOCATION': ('web', 'data', 'tmp', 'custom'),
@@ -581,7 +582,31 @@ def check_env():
             raise SettingError(f"{var}='{value}' is not yes or no")
         elif isinstance(kind, tuple) and value.lower() not in kind:
             raise SettingError(f"{var}='{value}' is not one of: {', '.join(kind)}")
+        elif kind == 'gateways':
+            try:
+                parse_gateways(value)
+            except ValueError as e:
+                raise SettingError(f"{var}='{value}': {e}")
     return warnings
+
+
+def parse_gateways(text, first=2):
+    """[(name, address)] from 'garden=192.168.1.101, 192.168.1.102': addresses
+    separated by commas, each optionally named; unnamed ones are called
+    gateway<n>, n counting from first. ValueError for a bad entry."""
+    result = []
+    for n, item in enumerate((i.strip() for i in str(text or '').split(',') if i.strip()), first):
+        name, _, address = item.rpartition('=')
+        name, address = name.strip() or f'gateway{n}', address.strip()
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*', name):
+            raise ValueError(f"'{name}' is not a usable gateway name (letters, digits, _ and -)")
+        if not address or ' ' in address or '=' in address:
+            raise ValueError(f"'{item}' is not an address")
+        result.append((name, address))
+    names = [n for n, _ in result]
+    if len(set(names)) < len(names):
+        raise ValueError('two gateways have the same name')
+    return result
 
 
 def _sensor_id(value):
@@ -931,6 +956,9 @@ class EcowittHttpInstaller(ExtensionInstaller):
             out('    No gateway IP address given, so the station driver and services are not being changed.')
             mode = 'skip'
 
+        # more gateways, merged with this one ([[sources]])
+        more = self._ask_more_gateways(existing, mode, ip)
+
         # which gauge WeeWX 'rain' and 'rainRate' come from
         rain_source = None
         if mode == 'driver':
@@ -956,7 +984,18 @@ class EcowittHttpInstaller(ExtensionInstaller):
             api_key = self._ask('    Ecowitt.net API key', api_key or '', env='API_KEY')
             app_key = self._ask('    Ecowitt.net application key', app_key or '', env='APP_KEY')
 
-        sensor_map = self._ask_sensor_map(existing.get('sensor_map', {}), channels)
+        # with [[sources]] each gateway has its own sensor map; the first
+        # gateway's takes the place of the section's
+        sources = existing.get('sources') or {}
+        first_source = next(iter(sources), None) if sources else None
+        current_map = sources[first_source].get('sensor_map', {}) if first_source else \
+            existing.get('sensor_map', {})
+        sensor_map = self._ask_sensor_map(current_map, channels)
+        more_maps = {}
+        for name, address, more_channels in more:
+            if more_channels:
+                self._out(f'    {name} ({address}):')
+                more_maps[name] = self._ask_sensor_map({}, more_channels)
         show_batt = self._ask_yes('Show battery state for sensors with no signal?',
                                   str(existing.get('show_all_batt', 'False')).lower() == 'true',
                                   env='SHOW_ALL_BATT')
@@ -994,11 +1033,27 @@ class EcowittHttpInstaller(ExtensionInstaller):
             section.pop(key, None)
         catchup = section.setdefault('catchup', {})
         catchup.update({'source': source, 'api_key': api_key, 'app_key': app_key})
-        for sid, (channel, note) in sensor_map.items():
-            if sid not in section['sensor_map']:
-                section['sensor_map'][sid] = channel
-                if note:
-                    section['sensor_map'].inline_comments[sid] = f'# {note}'
+        if more:
+            # this gateway becomes the first of [[sources]], with its sensor
+            # map, which isn't read from the section once there are sources
+            section['sources'] = {'gateway1': {'ip_address': ip}}
+            for name, address, _ in more:
+                section['sources'][name] = {'ip_address': address}
+            main_map = section['sources']['gateway1'].setdefault('sensor_map', {})
+            main_map.update(section.get('sensor_map') or {})
+            if 'sensor_map' in section:
+                section['sensor_map'].clear()
+        elif section.get('sources'):
+            main_map = section['sources'][next(iter(section['sources']))].setdefault('sensor_map', {})
+        else:
+            main_map = section['sensor_map']
+        for target, entries in [(main_map, sensor_map)] + [
+                (section['sources'][name].setdefault('sensor_map', {}), m) for name, m in more_maps.items()]:
+            for sid, (channel, note) in entries.items():
+                if sid not in target:
+                    target[sid] = channel
+                    if note:
+                        target.inline_comments[sid] = f'# {note}'
         section['loop_json'].update(loop_json)
         section['mqtt'].update(mqtt)
 
@@ -1020,6 +1075,57 @@ class EcowittHttpInstaller(ExtensionInstaller):
             out('Gateway settings saved; the station driver and services were not changed.')
         out('Restart WeeWX to start using the new settings.')
         return True
+
+    def _ask_more_gateways(self, existing, mode, ip):
+        """Other gateways to read with this one: [(name, address, sensor
+        channels)]. Not asked if [[sources]] is already set up (it is kept as
+        it is) or nothing is being set up."""
+        out = self._out
+        sources = existing.get('sources') or {}
+        if sources:
+            names = ', '.join(f"{n} ({c.get('ip_address', '?')})" for n, c in sources.items()
+                              if hasattr(c, 'get'))
+            out(f'    Several gateways are set up in [[sources]]: {names}. They are kept as they are;')
+            out('    to change them, edit [[sources]] in weewx.conf.')
+            return []
+        if mode == 'skip':
+            return []
+        if self._interactive():
+            out('    The driver can read other gateways too and merge their data with this one\'s')
+            out("    (eg a console in another building). Give their addresses, separated by commas,")
+            out("    optionally named (garden=192.168.1.101), or press Enter for none.")
+        while True:
+            answer = self._ask('Other gateways to read as well', '', env='MORE_GATEWAYS')
+            try:
+                listed = parse_gateways(answer)
+            except ValueError as e:
+                if not self._interactive():
+                    raise SettingError(f'Other gateways: {e}')
+                out(f'    {e}')
+                continue
+            if any(address == ip for _, address in listed):
+                out(f'    {ip} is this gateway; leaving it out.')
+                listed = [(n, a) for n, a in listed if a != ip]
+            if any(name == 'gateway1' for name, _ in listed):
+                out("    'gateway1' is this gateway's name; choose another.")
+                if not self._interactive():
+                    raise SettingError("Other gateways: 'gateway1' is the first gateway's name")
+                continue
+            break
+        result = []
+        for name, address in listed:
+            model, _, channels = self._probe(address)
+            if model:
+                out(f'    Found {model} at {address} ({name})')
+            else:
+                out(f'    No response from a device at {address} ({name}).')
+                if self._interactive() and not self._ask_yes('    Use this address anyway?', default=False):
+                    continue
+            result.append((name, address, channels))
+        if result:
+            out(f"    This gateway is 'gateway1' in [[sources]]; the others are "
+                f"{', '.join(n for n, _, _ in result)}.")
+        return result
 
     def _ask_rain_source(self, config_dict, existing, gauges):
         """Which gauge WeeWX 'rain' and 'rainRate' come from: tipping, piezo or none."""

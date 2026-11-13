@@ -32,9 +32,12 @@ Added
 -----
 
 - Fields from current firmware: windDir10 (0x6D, 10-minute average wind direction), t_rain24 and
-  p_rain24 (0x7C, 24-hour rain of each gauge). Battery and signal fields for every sensor the
-  gateway reports (ecowitt_http.py had none for the WH40, WH45/WH46, WH68, WS69, WS80, WS85 and
-  WN35, nor for WH51 channels 9–16, nor signal for WH54 and WH55 channel 4).
+  p_rain24 (0x7C, 24-hour rain of each gauge), t_rainhour and p_rainhour (0x7D, the last hour's
+  rain, which current firmware sends in place of 0x0F; in ecowitt_http.py these two fields were only
+  filled by Ecowitt.net catchup, and 0x7D was logged as an unknown observation). Battery and signal
+  fields for every sensor the gateway reports (ecowitt_http.py had none for the WH40, WH45/WH46,
+  WH68, WS69, WS80, WS85 and WN35, nor for WH51 channels 9–16, nor signal for WH54 and WH55 channel
+  4).
 - Sensor map ([[sensor_map]]): multi-channel sensors (WN31, WN34, WN35, WH41, WH51, WH54, WH55) are
   reported on a fixed channel chosen by sensor ID, so re-pairing a sensor doesn't move its data to
   other WeeWX fields; it applies to loop packets, catchup records, the service and the command line
@@ -118,7 +121,8 @@ Driver and catchup:
   list, giving fields co2.0.<obs>; PM10 (and WH46 PM1/PM4) values were left as text.
 - Catchup from Ecowitt.net stopped WeeWX at startup ('EcowittHttpDriver' object has no attribute
   'api_key'): the keys were never read. When it ran, its records had no readings (mapped to names
-  the field map doesn't use), and its hourly and daily rain were the wrong way round.
+  the field map doesn't use), and its hourly and daily rain were the wrong way round. Its 24-hour
+  rain wasn't converted to the station's units.
 - SD card catchup failed when ip_address includes a port, stopped at a file on the card whose name
   isn't a year and month, ended at a connection lost while reading a file, and gave records a
   floating-point dateTime. [[catchup]] retries (and, with source = device, grace) were ignored; with

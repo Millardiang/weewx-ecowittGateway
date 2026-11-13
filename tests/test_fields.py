@@ -330,3 +330,22 @@ def test_driver_file_loads_with_debug_logging(debug, monkeypatch, caplog):
     spec.loader.exec_module(module)
     assert '[[lightningcount]]' in module.EcowittHttpDriverConfEditor.accum_config_str
     assert not any('field map' in m for m in caplog.messages)
+
+
+def test_last_hour_rain_0x7D(egw, caplog):
+    """Current firmware reports the last hour's rain as 0x7D (rain and piezoRain), in place of 0x0F; it
+    was logged as an unknown observation and t_rainhour/p_rainhour were never filled."""
+    caplog.set_level(logging.INFO)
+    egw.define_units()
+    parser = egw.EcowittHttpParser(unit_system=weewx.METRICWX)
+    live = parser.parse_get_livedata_info({
+        'rain': [{'id': '0x0D', 'val': '0.0 mm'}, {'id': '0x0E', 'val': '1.2 mm/Hr'},
+                 {'id': '0x7D', 'val': '0.6 mm'}, {'id': '0x7C', 'val': '3.0 mm'},
+                 {'id': '0x13', 'val': '714.9 mm'}],
+        'piezoRain': [{'id': '0x7D', 'val': '0.03 in'}, {'id': '0x7C', 'val': '0.12 in'}]})
+    assert not any('0x7D' in m for m in caplog.messages)
+    mapped = egw.HttpMapper(driver_debug=egw.DebugOptions()).map_data(live)
+    assert mapped['t_rainhour'] == 0.6 and mapped['t_rain24'] == 3.0
+    assert mapped['p_rainhour'] == pytest.approx(0.762) and mapped['p_rain24'] == pytest.approx(3.048)
+    accum = accum_section(egw)
+    assert accum['t_rainhour']['extractor'] == 'last' and accum['p_rainhour']['extractor'] == 'last'

@@ -1431,6 +1431,7 @@ class HttpParserTestCase(unittest.TestCase):
         '0x19': 'process_speed_object',
                 '0x6D': 'process_direction_object',
                 '0x7C': 'process_rainfall_object',
+                '0x7D': 'process_rainfall_object',
         'srain_piezo': 'process_boolean_object'
     }
     # sensor IDs for sensors that are not registered (ie learning/registering

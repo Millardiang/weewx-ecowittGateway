@@ -33,7 +33,8 @@ Revision History
         - built on Gary Roderick's ecowitt_http.py 0.1.0a28 as weewx-ecowittGateway:
           driver EcowittGateway, config section [EcowittGateway] ([EcowittHttp]
           still read)
-        - fields 0x6D (windDir10) and 0x7C (t_rain24/p_rain24); battery and signal
+        - fields 0x6D (windDir10), 0x7C (t_rain24/p_rain24) and 0x7D
+          (t_rainhour/p_rainhour); battery and signal
           fields for every sensor the gateway reports; radiation_from_illuminance;
           pm2_5 from a WH45/WH46 without a channel 1 PM2.5 sensor
         - [[sensor_map]], ecwLoop.json/MQTT export (EcowittGatewayExport service),
@@ -294,6 +295,7 @@ DEFAULT_GROUPS = {
     'rain.0x0E.voltage': 'group_volt',
     'rain.0x10.val': 'group_rain',
     'rain.0x7C.val': 'group_rain',
+    'rain.0x7D.val': 'group_rain',
     'rain.0x10.battery': 'group_count',
     'rain.0x10.voltage': 'group_volt',
     'rain.0x11.val': 'group_rain',
@@ -304,7 +306,6 @@ DEFAULT_GROUPS = {
     'rain.0x12.voltage': 'group_volt',
     'rain.0x13.val': 'group_rain',
     't_rain': 'group_rain',
-    't_rainhour': 'group_rain',
     #    'rain.0x13.battery': 'group_count',
     'rain.0x13.voltage': 'group_volt',
     'piezoRain.srain_piezo.val': 'group_boolean',
@@ -316,6 +317,7 @@ DEFAULT_GROUPS = {
     'piezoRain.0x0E.voltage': 'group_volt',
     'piezoRain.0x10.val': 'group_rain',
     'piezoRain.0x7C.val': 'group_rain',
+    'piezoRain.0x7D.val': 'group_rain',
     'piezoRain.0x10.battery': 'group_count',
     'piezoRain.0x10.voltage': 'group_volt',
     'piezoRain.0x11.val': 'group_rain',
@@ -328,7 +330,6 @@ DEFAULT_GROUPS = {
     'piezoRain.0x13.voltage': 'group_volt',
     'piezoRain.srain_piezo': 'group_boolean',
     'p_rain': 'group_rain',
-    'p_rainhour': 'group_rain',
     'wh25.intemp': 'group_temperature',
     'wh25.inhumi': 'group_percent',
     'wh25.abs': 'group_pressure',
@@ -1148,7 +1149,7 @@ class HttpMapper(FieldMapper):
     default_rain_map = {
         't_rainevent': 'rain.0x0D.val',
         'rainRate': 'rain.0x0E.val',
-        't_rainhour': 't_rainhour',
+        't_rainhour': 'rain.0x7D.val',
         't_rainday': 'rain.0x10.val',
         't_rain24': 'rain.0x7C.val',
         't_rainweek': 'rain.0x11.val',
@@ -1157,7 +1158,7 @@ class HttpMapper(FieldMapper):
         'is_raining': 'piezoRain.srain_piezo.val',
         'p_rainevent': 'piezoRain.0x0D.val',
         'p_rainrate': 'piezoRain.0x0E.val',
-        'p_rainhour': 'p_rainhour',
+        'p_rainhour': 'piezoRain.0x7D.val',
         'p_rainday': 'piezoRain.0x10.val',
         'p_rain24': 'piezoRain.0x7C.val',
         'p_rainweek': 'piezoRain.0x11.val',
@@ -1435,7 +1436,7 @@ class SdMapper(FieldMapper):
         'common_list.0x15.val': 'Solar Rad',
         'common_list.0x17.val': 'UV-Index',
         'rain.0x0E.val': 'Rain Rate',
-        't_rainhour': 'Hourly Rain',
+        'rain.0x7D.val': 'Hourly Rain',
         'rain.0x0D.val': 'Event Rain',
         'rain.0x10.val': 'Daily Rain',
         'rain.0x7C.val': '24 Hour Rain',
@@ -1443,7 +1444,7 @@ class SdMapper(FieldMapper):
         'rain.0x12.val': 'Monthly Rain',
         'rain.0x13.val': 'Yearly Rain',
         'piezoRain.0x0E.val': 'Piezo Rate',
-        'p_rainhour': 'Piezo Hourly Rain',
+        'piezoRain.0x7D.val': 'Piezo Hourly Rain',
         'piezoRain.0x0D.val': 'Piezo Event Rain',
         'piezoRain.0x10.val': 'Piezo Daily Rain',
         'piezoRain.0x7C.val': 'Piezo 24 Hour Rain',
@@ -4718,7 +4719,7 @@ class EcowittNetCatchup(Catchup):
     # 'daily' the day's (ecowitt_http.py 0.1.0a28 had these two the wrong way
     # round)
     _net_rain = (('rain_rate', '{p}.0x0E.val'), ('event', '{p}.0x0D.val'),
-                 ('hourly', '{h}'), ('daily', '{p}.0x10.val'),
+                 ('hourly', '{p}.0x7D.val'), ('daily', '{p}.0x10.val'),
                  ('24_hours', '{p}.0x7C.val'), ('weekly', '{p}.0x11.val'),
                  ('monthly', '{p}.0x12.val'), ('yearly', '{p}.0x13.val'))
     # Map from Ecowitt.net history fields to internal driver fields. Map is
@@ -4736,8 +4737,8 @@ class EcowittNetCatchup(Catchup):
                    'humidity': 'wh25.inhumi'},
         'solar_and_uvi': {'solar': 'common_list.0x15.val',
                           'uvi': 'common_list.0x17.val'},
-        'rainfall': {k: v.format(p='rain', h='t_rainhour') for k, v in _net_rain},
-        'rainfall_piezo': {k: v.format(p='piezoRain', h='p_rainhour') for k, v in _net_rain},
+        'rainfall': {k: v.format(p='rain') for k, v in _net_rain},
+        'rainfall_piezo': {k: v.format(p='piezoRain') for k, v in _net_rain},
         'wind': {'wind_speed': 'common_list.0x0B.val',
                  'wind_gust': 'common_list.0x0C.val',
                  'wind_direction': 'common_list.0x0A.val',
@@ -5207,8 +5208,9 @@ class EcowittDeviceCatchup:
         'group_speed' : ('common_list.0x0B.val', 'common_list.0x0C.val'),
         'group_pressure': ('wh25.abs', 'wh25.rel', 'common_list.5.val'),
         'group_rain': ('rain.0x0D.val', 'rain.0x10.val', 'rain.0x11.val', 'rain.0x12.val',
-                       'rain.0x13.val', 't_rainhour', 'piezoRain.0x0D.val', 'piezoRain.0x10.val',
-                       'piezoRain.0x11.val', 'piezoRain.0x12.val', 'piezoRain.0x13.val', 'p_rainhour'),
+                       'rain.0x13.val', 'rain.0x7C.val', 'rain.0x7D.val', 'piezoRain.0x0D.val',
+                       'piezoRain.0x10.val', 'piezoRain.0x11.val', 'piezoRain.0x12.val',
+                       'piezoRain.0x13.val', 'piezoRain.0x7C.val', 'piezoRain.0x7D.val'),
         'group_rainrate': ('rain.0x0E.val', 'piezoRain.0x0E.val'),
         'group_illuminance': ('common_list.0x15.val', ),
         'group_distance': ('lightning.distance', ),
@@ -6756,6 +6758,7 @@ class EcowittHttpParser:
         '0x19': 'process_speed_object',         # day max wind speed
         '0x6D': 'process_direction_object',     # 10 minute average wind direction
         '0x7C': 'process_rainfall_object',      # rain in the last 24 hours
+        '0x7D': 'process_rainfall_object',      # rain in the last hour
         'srain_piezo': 'process_boolean_object'  # is raining
     }
     # get_rain_totals and get_piezo_rain fields

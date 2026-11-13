@@ -323,10 +323,28 @@ and MQTT), but WeeWX only archives, and so only shows in reports and graphs, the
 has a column for. The standard database (`wview_extended`) has columns for the common ones, such as
 `outTemp`, `inTemp`, `pressure`, `rainRate`, `illuminance`, `UV`, `pm2_5`, `pm10_0`, `co2`,
 `extraTemp1`–`8`, `soilMoist1`–`4` and `leafWet1`–`2` (`rain`, `barometer` and `dewpoint` are
-calculated by WeeWX). Most Ecowitt-specific fields need a column added; stop WeeWX first:
+calculated by WeeWX). The Ecowitt-specific fields (`t_rainday`, `wh40_batt`, `pm2_52`,
+`gateway_online_garden` …) have no column there.
+
+**The additions database.** With `[[additions]] enable = True` (the installer asks, default yes),
+the `EcowittAdditions` service archives the fields of each archive record, live and catchup, that
+the station's database has no column for in a database of their own, `ecowitt_additions.sdb` (next
+to `weewx.sdb`). It needs no setting up: a column, with its daily summary, is added the first time a
+field has a value, so a sensor paired later gets its columns then, and sensors that aren't paired
+add none. Only numbers are stored. Skins use the fields through its data binding,
+`ecowitt_binding`:
+
+    $current($data_binding='ecowitt_binding').t_rainday
+    $day($data_binding='ecowitt_binding').wh40_batt.min
+    $week($data_binding='ecowitt_binding').pm2_52.avg
+
+The database is set in `[DataBindings] [[ecowitt_binding]]` and `[Databases] [[ecowitt_sqlite]]`
+(SQLite; point the binding at a MySQL database instead if you use one). Uninstalling leaves the file.
+
+To store a field in the station's own database instead, add a column there (stop WeeWX first); from
+then on the field is archived there, not in the additions database:
 
     weectl database add-column wh40_batt --type=REAL
-    weectl database add-column pm2_52 --type=REAL
 
 `weectl device --active-map` lists the fields your sensors fill.
 
@@ -367,8 +385,8 @@ those names.
 
 The driver can read two or more gateways at once, for example a GW2000 in the house and a WS3900
 console in the garden, and merge them into one stream of loop packets. If one gateway stops
-answering, the others carry on. List the gateways in `[[sources]]` (by hand: the installer sets up
-one gateway):
+answering, the others carry on. The installer asks for other gateways after the first one and
+writes `[[sources]]`; you can also set it up or change it by hand:
 
     [EcowittGateway]
         driver = user.weewx-ecowittGateway

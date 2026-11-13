@@ -48,8 +48,9 @@ commit `31bdfe5`). This entry lists what it changes and adds to that driver.
   API (`api = auto|http|tcp`, `tcp_port`; `weectl device --api`). Catchup for a GW1000 uses
   Ecowitt.net.
 - **Installer**: asks for the device address (checking it over HTTP or the TCP API), poll interval,
-  driver/service/skip, rain source, catchup source and Ecowitt.net keys, sensor map, battery
-  display, `radiation`, `loop_on_init`, `ecwLoop.json` and MQTT. Every answer can come from an
+  driver/service/skip, other gateways to read as well (written to `[[sources]]`), rain source,
+  catchup source and Ecowitt.net keys, sensor map (for each gateway), battery display,
+  `radiation`, the additions database, `loop_on_init`, `ecwLoop.json` and MQTT. Every answer can come from an
   `ECOWITT_*` environment variable for unattended installs; a bad value stops the install before
   anything is changed. Without a terminal or variables it adds its settings and leaves the station
   driver unchanged.
@@ -69,6 +70,11 @@ commit `31bdfe5`). This entry lists what it changes and adds to that driver.
 - **`radiation_from_illuminance`**: WeeWX `radiation` (W/m²) worked out from the light sensor's
   `illuminance` (lux) with Ecowitt's factor (126.7 lux per W/m²), so standard skins show it and WeeWX
   can work out `ET`.
+- **The additions database** (`EcowittAdditions` service, `[[additions]]`): the fields of each
+  archive record that the station's database has no column for are archived in
+  `ecowitt_additions.sdb`, with a column (and daily summary) added for each the first time it has a
+  value; skins use them through the `ecowitt_binding` data binding. The installer asks (default
+  yes, `ECOWITT_ADDITIONS`).
 - **`pm2_5`** is filled from the WH45/WH46 when there is no WH41/WH43 on channel 1.
 - **Catchup**: a warning when the records' interval differs from `archive_interval`, a summary after
   each catchup, `[[catchup]] file_port` for a device behind port forwarding.

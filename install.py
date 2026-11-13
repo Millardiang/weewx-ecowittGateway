@@ -67,6 +67,7 @@ LEGACY_SECTION = 'EcowittHttp'
 MODULE = 'user.weewx-ecowittGateway'
 LEGACY_MODULE = 'user.ecowitt_http'
 EXPORT_SERVICE = f'{MODULE}.EcowittGatewayExport'
+ADDITIONS_SERVICE = f'{MODULE}.EcowittAdditions'
 SERVICE = f'{MODULE}.EcowittHttpService'
 # ecowitt_http.py's extension name and file
 LEGACY_EXTENSION = 'Ecowitt_HTTP'
@@ -159,6 +160,27 @@ ecowitt_config = """
         units = native
         retain = False
         tls = False
+
+    # Archive the fields the WeeWX database has no column for (Ecowitt-specific
+    # fields such as t_rainday or wh40_batt) in a database of their own, with
+    # a column added for each the first time it has a value. Skins use them
+    # with $day($data_binding='ecowitt_binding').wh40_batt.last and the like.
+    [[additions]]
+        enable = False
+        data_binding = ecowitt_binding
+
+[DataBindings]
+    # the fields the WeeWX database has no column for (EcowittAdditions)
+    [[ecowitt_binding]]
+        database = ecowitt_sqlite
+        table_name = archive
+        manager = weewx.manager.DaySummaryManager
+        schema = user.weewx-ecowittGateway.ADDITIONS_SCHEMA
+
+[Databases]
+    [[ecowitt_sqlite]]
+        database_name = ecowitt_additions.sdb
+        database_type = SQLite
 
 [StdWXCalculate]
 
@@ -515,6 +537,7 @@ SETTINGS = {
     'SENSOR_MAP': 'bool',
     'SHOW_ALL_BATT': 'bool',
     'RADIATION': 'bool',
+    'ADDITIONS': 'bool',
     'MORE_GATEWAYS': 'gateways',
     'LOOP_ON_INIT': 'bool',
     'LOOP_JSON': 'bool',
@@ -739,7 +762,10 @@ class EcowittHttpInstaller(ExtensionInstaller):
             data_services=SERVICE,
             # writes ecwLoop.json and publishes to MQTT when enabled, does
             # nothing otherwise
-            restful_services=EXPORT_SERVICE
+            restful_services=EXPORT_SERVICE,
+            # archives the fields the WeeWX database has no column for, when
+            # [[additions]] is enabled; does nothing otherwise
+            archive_services=ADDITIONS_SERVICE
         )
         self._engine = None
 
@@ -1006,6 +1032,10 @@ class EcowittHttpInstaller(ExtensionInstaller):
                                   "(illuminance, lux)?",
                                   str(existing.get('radiation_from_illuminance', replacing_earlier)).lower() == 'true',
                                   env='RADIATION')
+        additions = self._ask_yes('Archive the fields the WeeWX database has no column for, in '
+                                  'ecowitt_additions.sdb?',
+                                  str((existing.get('additions') or {}).get('enable', True)).lower() == 'true',
+                                  env='ADDITIONS')
         loop_on_init = None
         if mode == 'driver':
             loop_on_init = self._ask_yes('Keep retrying at startup if the gateway cannot be reached '
@@ -1056,6 +1086,9 @@ class EcowittHttpInstaller(ExtensionInstaller):
                         target.inline_comments[sid] = f'# {note}'
         section['loop_json'].update(loop_json)
         section['mqtt'].update(mqtt)
+        section['additions']['enable'] = str(additions)
+        if additions:
+            self._add_service(config_dict, 'archive_services', ADDITIONS_SERVICE)
 
         if mode != 'service':
             self._remove_service(config_dict)
@@ -1126,6 +1159,16 @@ class EcowittHttpInstaller(ExtensionInstaller):
             out(f"    This gateway is 'gateway1' in [[sources]]; the others are "
                 f"{', '.join(n for n, _, _ in result)}.")
         return result
+
+    @staticmethod
+    def _add_service(config_dict, group, service):
+        """Add a service to an [Engine] [[Services]] list, if not there.
+        (WeeWX adds the installer's services after configure() on an install,
+        but not on a reconfigure of an existing install.)"""
+        services = config_dict.setdefault('Engine', {}).setdefault('Services', {})
+        current = _as_list(services.get(group, []))
+        if service not in current:
+            services[group] = current + [service]
 
     def _ask_rain_source(self, config_dict, existing, gauges):
         """Which gauge WeeWX 'rain' and 'rainRate' come from: tipping, piezo or none."""

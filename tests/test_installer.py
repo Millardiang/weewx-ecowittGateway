@@ -272,3 +272,99 @@ def test_case_insensitive_file_system_keeps_the_new_driver(tmp_path):
     assert install.EcowittHttpInstaller.remove_legacy_extension(engine) == []
     assert (user / 'weewx-ecowittGateway.py').read_text() == 'new driver'
     assert (ext / 'weewx-ecowittGateway' / 'install.py').exists()
+
+
+# ------------------------------------------------------------------ other gateways ([[sources]])
+
+@pytest.fixture
+def second_gateway():
+    from conftest import FakeGateway, load_dump
+    gw = FakeGateway(load_dump('gw2000_ws90.json'))
+    yield gw
+    gw.close()
+
+
+def test_other_gateways_make_sources(monkeypatch, gateway, second_gateway):
+    env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver', CATCHUP='none', SENSOR_MAP='yes',
+        MORE_GATEWAYS=f'garden={second_gateway.address}')
+    conf, lines = run()
+    section = conf['EcowittGateway']
+    sources = section['sources']
+    assert list(sources) == ['gateway1', 'garden']
+    assert sources['gateway1']['ip_address'] == gateway.address
+    assert sources['garden']['ip_address'] == second_gateway.address
+    # each gateway's sensor map in its own subsection; the section's isn't read with [[sources]]
+    assert sources['gateway1']['sensor_map'] == {'5E': '1', 'C3': '1', 'C0FFEE': '2'}
+    assert sources['garden']['sensor_map'] == {'5E': '1', 'C3': '1', 'C0FFEE': '2'}
+    assert not section['sensor_map']
+    assert any(f'Found GW2000' in line and 'garden' in line for line in lines)
+    # the driver reads both
+    import conftest
+    names = [n for n, _ in conftest.egw_module.source_configs(section)]
+    assert names == ['gateway1', 'garden']
+
+
+def test_unnamed_other_gateways(monkeypatch, gateway, second_gateway):
+    env(monkeypatch, IP_ADDRESS=gateway.address, MODE='service', CATCHUP='none',
+        MORE_GATEWAYS=f'{second_gateway.address}, 192.0.2.7')
+    conf, lines = run()
+    sources = conf['EcowittGateway']['sources']
+    assert list(sources) == ['gateway1', 'gateway2', 'gateway3']
+    assert sources['gateway3']['ip_address'] == '192.0.2.7'      # kept, though it didn't answer
+    assert any('No response from a device at 192.0.2.7' in line for line in lines)
+
+
+def test_no_other_gateways_by_default(monkeypatch, gateway):
+    env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver', CATCHUP='none')
+    conf, _ = run()
+    assert 'sources' not in conf['EcowittGateway']
+
+
+@pytest.mark.parametrize('value', ['garden=', 'my garden=192.168.1.5', 'a=1.2.3.4, a=1.2.3.5'])
+def test_bad_other_gateways_stop_the_install(monkeypatch, gateway, value):
+    env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver', MORE_GATEWAYS=value)
+    with pytest.raises(install.SettingError):
+        run()
+
+
+def test_existing_sources_are_kept(monkeypatch, gateway):
+    env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver', CATCHUP='none', SENSOR_MAP='yes',
+        MORE_GATEWAYS='other=192.0.2.9')
+    conf, lines = run(WEEWX_CONF + f"""[EcowittGateway]
+    ip_address = {gateway.address}
+    [[sources]]
+        [[[house]]]
+            ip_address = {gateway.address}
+        [[[shed]]]
+            ip_address = 192.0.2.8
+""")
+    sources = conf['EcowittGateway']['sources']
+    assert list(sources) == ['house', 'shed']                  # not changed, nothing added
+    assert any('Several gateways are set up in [[sources]]' in line for line in lines)
+    # new sensor map entries go to the first gateway, where they are read
+    assert sources['house']['sensor_map'] == {'5E': '1', 'C3': '1', 'C0FFEE': '2'}
+
+
+# ------------------------------------------------------------------ fields with no database column
+
+def test_additions_database_by_default(monkeypatch, gateway):
+    env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver', CATCHUP='none')
+    conf, lines = run()
+    assert conf['EcowittGateway']['additions'] == {'enable': 'True', 'data_binding': 'ecowitt_binding'}
+    assert conf['DataBindings']['ecowitt_binding']['schema'] == 'user.weewx-ecowittGateway.ADDITIONS_SCHEMA'
+    assert conf['Databases']['ecowitt_sqlite']['database_name'] == 'ecowitt_additions.sdb'
+    assert 'user.weewx-ecowittGateway.EcowittAdditions' in conf['Engine']['Services']['archive_services']
+    assert any("no column for, in ecowitt_additions.sdb: y  (default)" in line for line in lines)
+
+
+def test_additions_database_declined(monkeypatch, gateway):
+    env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver', CATCHUP='none', ADDITIONS='no')
+    conf, _ = run()
+    assert conf['EcowittGateway']['additions']['enable'] == 'False'
+
+
+def test_additions_setting_kept_on_reinstall(monkeypatch, gateway):
+    env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver', CATCHUP='none')
+    conf, _ = run(WEEWX_CONF + f"[EcowittGateway]\n    ip_address = {gateway.address}\n"
+                               "    [[additions]]\n        enable = False\n")
+    assert conf['EcowittGateway']['additions']['enable'] == 'False'

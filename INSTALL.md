@@ -45,6 +45,10 @@ Gateway IP address, eg 192.168.1.100 [www.xxx.yyy.zzz]: 192.168.1.100
     Found GW2000A_V3.1.4 at 192.168.1.100
 Poll interval in seconds [20]:
 Use as the station driver, as a service alongside another driver, or skip (driver/service/skip) [driver]:
+    The driver can read other gateways too and merge their data with this one's
+    (eg a console in another building). Give their addresses, separated by commas,
+    optionally named (garden=192.168.1.101), or press Enter for none.
+Other gateways to read as well []:
     Paired rain gauges: piezo and tipping
     tipping = WeeWX 'rain'/'rainRate' from the tipping gauge
     piezo   = WeeWX 'rain'/'rainRate' from the piezo gauge
@@ -65,6 +69,7 @@ Fetch missed data at startup from (either/device/net/none) [either]:
 Fix these sensors to their current channels (sensor_map)? (y/n) [y]:
 Show battery state for sensors with no signal? (y/n) [n]:
 Record WeeWX 'radiation' (W/m2), worked out from the light sensor (illuminance, lux)? (y/n) [n]:
+Archive the fields the WeeWX database has no column for, in ecowitt_additions.sdb? (y/n) [y]:
 Keep retrying at startup if the gateway cannot be reached (loop_on_init)? (y/n) [y]:
 Write each loop packet to ecwLoop.json (for web pages and scripts)? (y/n) [n]: y
     web    = WeeWX web pages folder: /home/pi/weewx-data/public_html/ecwLoop.json
@@ -98,6 +103,12 @@ Restart WeeWX to start using the new settings.
 - **driver:** makes the gateway your station. The installer sets `station_type`, software archive
   records, `loop_on_init` and the rain calculation.
 - **service:** adds gateway data to another driver's loop packets. Your `station_type` is left alone.
+- **Other gateways:** press Enter for none. Otherwise give the addresses of the other gateways or
+  consoles to read, separated by commas, each optionally named: `garden=192.168.1.101,
+  192.168.1.102` (unnamed ones are called `gateway2`, `gateway3` …). Each is checked like the first
+  and its multi-channel sensors are offered for its own sensor map. The installer writes them all to
+  `[[sources]]`, this gateway first as `gateway1`; see *Several gateways* in the README for how their
+  data is merged. If `[[sources]]` is already set up, it's kept and the question isn't asked.
 - **skip:** only saves the gateway settings.
 - **Rain source** (driver mode): WeeWX works out the rain in each archive period from the chosen
   gauge's yearly total (`[StdWXCalculate] [[Delta]]`). The question lists the gauges the gateway has
@@ -110,6 +121,11 @@ Restart WeeWX to start using the new settings.
   the installer lists them with their IDs and offers to fix each to its current channel, so its
   data stays in the same WeeWX fields if it's re-paired later. On a re-install, only sensors not
   already in the map are offered. See the README's *Sensor map* section.
+- **Additions database:** the WeeWX database only stores fields it has a column for, and has none
+  for the Ecowitt-specific ones (`t_rainday`, `wh40_batt` …). Answer **y** (the default) to archive
+  those in `ecowitt_additions.sdb`, next to `weewx.sdb`, with a column added for each the first time
+  it has a value. Skins use them with `$day($data_binding='ecowitt_binding').wh40_batt.min` and the
+  like. See *Fields, the database and [Accumulator]* in the README.
 - **radiation:** the light sensor measures illuminance (lux), recorded in `illuminance`. Answer **y**
   to also record WeeWX's `radiation` (W/m²), worked out with Ecowitt's factor (126.7 lux per W/m²),
   Standard skins show `radiation`, and WeeWX needs it to work out evapotranspiration (`ET`). The
@@ -215,6 +231,8 @@ WeeWX's uninstaller can't undo the changes made from your answers. Afterwards:
 - `[EcowittGateway]` is left with only `[[field_map_extensions]]` in it (the `rainRate` mapping),
   plus any settings you added by hand, such as `[[sources]]` and `[[priority]]` for several
   gateways: delete the section.
+- the additions database, `ecowitt_additions.sdb`, stays where it is (with `weewx.sdb`); delete it if
+  you don't want its data.
 
 ---
 
@@ -309,6 +327,7 @@ Two more things are needed for a run with no questions at all:
 |---|---|---|
 | `ECOWITT_IP_ADDRESS` | IP address, or `host:port` | none: `ip_address = www.xxx.yyy.zzz` and the station driver isn't changed. **Set this.** |
 | `ECOWITT_MODE` | `driver`, `service` or `skip` | `driver` when `ECOWITT_IP_ADDRESS` is set, otherwise `skip` |
+| `ECOWITT_MORE_GATEWAYS` | other gateways' addresses, comma-separated, each optionally `name=address` | none |
 | `ECOWITT_POLL_INTERVAL` | seconds | `20` |
 | `ECOWITT_RAIN_SOURCE` | `tipping`, `piezo` or `none` (`both` means `tipping`) | `tipping`, or `piezo` if that is the only gauge paired (driver mode only) |
 | `ECOWITT_CATCHUP` | `either`, `device`, `net` or `none` | `either` |
@@ -316,6 +335,7 @@ Two more things are needed for a run with no questions at all:
 | `ECOWITT_SENSOR_MAP` | yes/no | yes: fix any multi-channel sensors found to their channels |
 | `ECOWITT_SHOW_ALL_BATT` | yes/no | no |
 | `ECOWITT_RADIATION` | yes/no | yes over an earlier weewx-EcowittGateway extension, else no |
+| `ECOWITT_ADDITIONS` | yes/no | yes |
 | `ECOWITT_LOOP_ON_INIT` | yes/no | yes (driver mode only) |
 | `ECOWITT_LOOP_JSON` | yes/no | no |
 | `ECOWITT_LOOP_JSON_LOCATION` | `web`, `data`, `tmp` or `custom` | `web` |

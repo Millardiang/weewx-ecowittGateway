@@ -2123,6 +2123,76 @@ class EcowittGatewayExport(weewx.engine.StdService):
 
 
 # ============================================================================
+#              EcowittAdditions: fields the WeeWX database can't hold
+# ============================================================================
+
+# the additions database starts with only these columns; a column is added
+# (with its daily summary) for each field the first time it has a value
+ADDITIONS_SCHEMA = {
+    'table': [('dateTime', 'INTEGER NOT NULL UNIQUE PRIMARY KEY'),
+              ('usUnits', 'INTEGER NOT NULL'),
+              ('interval', 'INTEGER NOT NULL')],
+    'day_summaries': []
+}
+ADDITIONS_BINDING = 'ecowitt_binding'
+COLUMN_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*$')
+
+
+class EcowittAdditions(weewx.engine.StdService):
+    """Archive the fields of each archive record that the station's database
+    has no column for, in a database of their own.
+
+    Runs in archive_services, so it sees every archive record, live and
+    catchup, with all its fields; the station's database ([StdArchive]
+    data_binding) keeps the ones it has columns for. The rest (numbers only)
+    go to [[additions]] data_binding (default ecowitt_binding,
+    ecowitt_additions.sdb), which gets a column, with a daily summary, the
+    first time a field has a value. Skins use them with that binding, eg
+    $day($data_binding='ecowitt_binding').wh40_batt.last. Off unless
+    [[additions]] enable is set; an error is logged and never stops WeeWX.
+    """
+
+    def __init__(self, engine, config_dict):
+        super().__init__(engine, config_dict)
+        conf = driver_config(config_dict).get('additions') or {}
+        self.enabled = weeutil.weeutil.tobool(conf.get('enable', False))
+        self.binding = conf.get('data_binding', ADDITIONS_BINDING)
+        self.main_binding = (config_dict.get('StdArchive') or {}).get('data_binding', 'wx_binding')
+        if self.enabled:
+            self.bind(weewx.NEW_ARCHIVE_RECORD, self.new_archive_record)
+            log.info("EcowittAdditions: fields the %s database has no column for are archived "
+                     "with %s", self.main_binding, self.binding)
+
+    def new_archive_record(self, event):
+        try:
+            self.archive(event.record)
+        except Exception as e:
+            log.error('EcowittAdditions: could not archive the additional fields: %s', e)
+
+    def archive(self, record):
+        """Store a record's fields that the station's database has no column for."""
+
+        main_columns = set(self.engine.db_binder.get_manager(self.main_binding).sqlkeys)
+        extra = {k: v for k, v in record.items()
+                 if k not in main_columns and COLUMN_NAME.match(k)
+                 and (v is None or isinstance(v, (int, float)))}
+        if not any(v is not None for v in extra.values()):
+            return
+        manager = self.engine.db_binder.get_manager(self.binding, initialize=True)
+        new = [k for k, v in extra.items() if v is not None and k not in manager.sqlkeys]
+        if new:
+            for column in new:
+                manager.add_column(column, 'REAL')
+            # the manager caches its columns and daily summaries
+            manager.sqlkeys = manager.connection.columnsOf(manager.table_name)
+            manager._sync()
+            log.info('EcowittAdditions: added %s to %s', ', '.join(new), self.binding)
+        values = {k: v for k, v in extra.items() if k in manager.sqlkeys}
+        manager.addRecord(dict(values, dateTime=record['dateTime'], usUnits=record['usUnits'],
+                               interval=record['interval']))
+
+
+# ============================================================================
 #                     One gateway: SourceStatus, GatewaySource
 # ============================================================================
 

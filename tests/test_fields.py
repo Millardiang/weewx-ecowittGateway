@@ -313,3 +313,20 @@ def test_installer_offers_radiation_over_an_earlier_extension(monkeypatch, gatew
     env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver', RADIATION='yes')
     conf, _ = run()
     assert conf['EcowittGateway']['radiation_from_illuminance'] == 'True'
+
+
+@pytest.mark.parametrize('debug', [1, 2])
+def test_driver_file_loads_with_debug_logging(debug, monkeypatch, caplog):
+    """The [Accumulator] list is built when the file is loaded (eg by 'weectl station reconfigure'):
+    with debug on, that logged field maps through log_dict(), not yet defined (NameError)."""
+    import importlib.util
+    import os
+    from conftest import ROOT
+    monkeypatch.setattr(weewx, 'debug', debug)
+    caplog.set_level(logging.DEBUG)
+    spec = importlib.util.spec_from_file_location(
+        'egw_debug', os.path.join(ROOT, 'bin', 'user', 'weewx-ecowittGateway.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert '[[lightningcount]]' in module.EcowittHttpDriverConfEditor.accum_config_str
+    assert not any('field map' in m for m in caplog.messages)

@@ -76,6 +76,10 @@ tests/test_fields.py
     battery and signal fields, the pm2_5 fallback, radiation, the warning about WeeWX's rule for
     rain
 
+tests/test_additions.py
+    The additions database: fields with no column in the station's database, columns added as fields
+    first have a value
+
 tests/test_docs.py
     The .txt copies of the documents are up to date
 

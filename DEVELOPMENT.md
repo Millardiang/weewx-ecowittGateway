@@ -50,6 +50,7 @@ python3 -m pyflakes bin/user/weewx-ecowittGateway.py | grep -v "never used\|plac
 | `tests/test_cli.py` | Every `weectl device` and direct command, on both fake gateways |
 | `tests/test_installer.py` | The installer with `ECOWITT_*` variables, probing, legacy sections, reconfigure |
 | `tests/test_fields.py` | `[Accumulator]` entries and their tidying when installing over an earlier extension, sensor battery and signal fields, the `pm2_5` fallback, radiation, the warning about WeeWX's rule for `rain` |
+| `tests/test_additions.py` | The additions database: fields with no column in the station's database, columns added as fields first have a value |
 | `tests/test_docs.py` | The `.txt` copies of the documents are up to date |
 | `tests/test_snapshot.py` | The API parser and command-line tool produce what the snapshot recorded (`tests/snapshot.py`, `tests/fixtures/snapshot.json`) |
 | `tests/test_parser_faults.py` | Faults in `ecowitt_http.py`'s parser and live-data handling |

@@ -1334,8 +1334,9 @@ class HttpMapper(FieldMapper):
     default_map.update(default_wind_map)
     default_map.update(default_sensor_state_map)
 
-    def __init__(self, driver_debug=None, default_map=None, **mapper_config):
-        """Initialise an HttpMapper object."""
+    def __init__(self, driver_debug=None, default_map=None, quiet=False, **mapper_config):
+        """Initialise an HttpMapper object. quiet: don't log the field map
+        (a map made only to read its field names)."""
 
         # obtain my base map, if we were passed a default map use it,
         # otherwise fall back to our default_map
@@ -1365,7 +1366,9 @@ class HttpMapper(FieldMapper):
         # The whole map is some 17 kB of text, so with debug = 1 only its size
         # is logged; it is logged in full (naturally sorted, over several
         # lines) with debug = 2 or more, or the 'loop' driver debug option.
-        if weewx.debug >= 2 or getattr(driver_debug, 'loop', False):
+        if quiet:
+            pass
+        elif weewx.debug >= 2 or getattr(driver_debug, 'loop', False):
             log_dict('     field map is ', self.field_map)
         elif getattr(driver_debug, 'any', False) or weewx.debug > 0:
             log.info('     field map has %d entries (logged in full with debug = 2)', len(self.field_map))
@@ -3605,7 +3608,7 @@ def accumulator_extractors():
 
     extractors = {field: 'sum' for field in ACCUMULATOR_SUM}
     for wn32 in (False, True):
-        mapper = HttpMapper(driver_debug=DebugOptions(), wn32_indoor=wn32, wn32_outdoor=wn32)
+        mapper = HttpMapper(driver_debug=DebugOptions(), quiet=True, wn32_indoor=wn32, wn32_outdoor=wn32)
         for field, source in mapper.field_map.items():
             if _keeps_last_value(source):
                 extractors.setdefault(field, 'last')

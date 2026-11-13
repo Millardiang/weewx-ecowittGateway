@@ -1,0 +1,156 @@
+# Development
+
+How to run the tests, add test data from a real gateway, and find your way around the code.
+
+## Running the tests
+
+The tests need Python 3.7 or later, WeeWX 5 and pytest (7 or later). They don't need a gateway:
+they run the driver against fake gateways on `127.0.0.1`.
+
+```bash
+python3 -m venv ~/egw-test
+source ~/egw-test/bin/activate
+pip install weewx configobj pytest paho-mqtt
+cd weewx-ecowittGateway
+python3 -m pytest            # about two minutes
+```
+
+`pytest.ini` runs both suites:
+
+- `tests/` (pytest): the driver, the service, the installer and the command-line tools against the
+  fake gateways, plus unit tests. `paho-mqtt` is only needed for the MQTT export test, which is
+  skipped without it.
+- `bin/user/tests/test_http.py` (unittest): Gary Roderick's test suite from `ecowitt_http.py`,
+  updated for the new module name and the fixes made here.
+
+`python3 -m pytest tests -k "not cli"` leaves out the command-line tests, the slowest part.
+
+Also check the code before a release:
+
+```bash
+pip install pyflakes
+python3 -m pyflakes tests install.py
+python3 -m pyflakes bin/user/weewx-ecowittGateway.py | grep -v "never used\|placeholders\|imported but unused"
+```
+
+(The driver has many unused-variable warnings from `ecowitt_http.py`; anything else is new.)
+
+| File | Covers |
+|---|---|
+| `tests/conftest.py` | The fake gateways (`FakeGateway`, `FakeGw1000`), a fake MQTT broker, shared fixtures |
+| `tests/test_parsing.py` | API responses, units, the field map, SD card CSV files |
+| `tests/test_source.py` | `GatewaySource`: status, loop packets, catchup settings and sources |
+| `tests/test_driver_service.py` | The driver's loop packets and catchup, the GW1000, the service, error recovery |
+| `tests/test_sensors.py` | `[[sensor_map]]` |
+| `tests/test_tcp.py` | The GW1000 TCP API |
+| `tests/test_export.py` | `ecwLoop.json` and MQTT |
+| `tests/test_features.py` | `[[limits]]`, `ignore_no_signal`, `gateway_online`, catchup from the SD card and Ecowitt.net, `--sd-files`, `--catchup-dry-run`, service-mode rain |
+| `tests/test_logging.py` | Long log lines, the field map and active field map, debug options, `log_next_update` |
+| `tests/test_multi.py` | Several gateways: `[[sources]]`, priorities, merged totals against WeeWX's `Delta`, outages, merged catchup, the driver and service with two fake gateways, `--sources`/`--source` |
+| `tests/test_cli.py` | Every `weectl device` and direct command, on both fake gateways |
+| `tests/test_installer.py` | The installer with `ECOWITT_*` variables, probing, legacy sections, reconfigure |
+| `tests/test_fields.py` | `[Accumulator]` entries and their tidying when installing over an earlier extension, sensor battery and signal fields, the `pm2_5` fallback, radiation, the warning about WeeWX's rule for `rain` |
+| `tests/test_docs.py` | The `.txt` copies of the documents are up to date |
+| `tests/test_snapshot.py` | The API parser and command-line tool produce what the snapshot recorded (`tests/snapshot.py`, `tests/fixtures/snapshot.json`) |
+| `tests/test_parser_faults.py` | Faults in `ecowitt_http.py`'s parser and live-data handling |
+
+The snapshot test is for changes that shouldn't change behaviour (tidying, refactoring). When a
+change is meant to alter what the parser or a command prints, check the cases it reports are the
+ones you meant to change, then record the snapshot again: `python3 tests/snapshot.py --write`.
+
+## Plain-text copies of the documents
+
+Each document (`README.md`, `INSTALL.md`, `CHANGELOG.md`, `DEVELOPMENT.md`) has a plain-text copy
+beside it (`README.txt` and so on), for reading without a Markdown viewer. Edit the `.md` files only,
+then rebuild the copies (`tests/test_docs.py` fails until you do):
+
+```bash
+python3 tools/md_to_txt.py
+```
+
+The script needs only the Python standard library.
+
+## The fake gateways
+
+`FakeGateway` (in `tests/conftest.py`) is a small HTTP server that answers each API command from a
+JSON file: `tests/fixtures/gw2000_ws90.json` has an entry per command (`get_livedata_info`,
+`get_sensors_info?page=1` …), the format `weectl device --dump-api` writes. A test can change
+a reading between polls (`gateway.live('rain', '0x13')['val'] = '451.0 mm'`), remove or replace a
+response, or set `gateway.down = True` to answer 404.
+
+`FakeGw1000` answers the GW1000's binary TCP API with the same readings, on a free port (pass it as
+`tcp_port`). `FakeBroker` is just enough of an MQTT broker to record what is published.
+
+The fixture is made up, modelled on the Ecowitt local HTTP API and on the example responses in
+`ecowitt_http.py`. Real responses are better, and easy to add:
+
+1. On the WeeWX machine: `weectl device --dump-api --output=my-gateway.json`. Passwords, keys and
+   station IDs are masked.
+2. Copy the file into `tests/fixtures/`. Check that every `get_sensors_info?page=N` entry is there
+   (the driver reads pages until one is missing), and remove anything you'd rather not share.
+3. Use it in a test with `FakeGateway(load_dump('my-gateway.json'))`, or send it with a bug report.
+
+A GW1000's dump has the data part of each TCP API response as hex instead; `FakeGw1000` doesn't read
+those files yet.
+
+`tests/fixtures/sd_202611A.csv` is an SD card history file. A gateway serves these on port 81;
+`FakeGateway(..., files={'202611A.csv': text})` serves them on its own port, so a test points
+catchup at it with `[[catchup]] file_port = <gateway.port>` (the `sd_card` and `sd_station` fixtures
+in `tests/test_features.py` do this). Ecowitt.net catchup is tested by replacing
+`EcowittNetCatchup.request` with a function returning an API-style response.
+
+## How the code is laid out
+
+Everything is in `bin/user/weewx-ecowittGateway.py`, in this order:
+
+| Part | Classes and functions |
+|---|---|
+| Settings, units and field groups | constants, `DEFAULT_GROUPS`, `DebugOptions` |
+| Field mapping | `FieldMapper`, `HttpMapper` (live data), `SdMapper` (SD card CSV columns) |
+| Sensor map, limits, exports | `SensorMapper`, `no_signal_keys`, `FieldLimits`, `LoopJsonWriter`, `MqttPublisher`, `EcowittGatewayExport` |
+| **One gateway** | `SourceStatus`, `GatewaySource` |
+| WeeWX entry points | `EcowittCommon`, `EcowittHttpService`, `EcowittHttpDriver` (further down), `loader` |
+| `weectl` support | `EcowittHttpDriverConfEditor`, `EcowittHttpDriverConfigurator` |
+| History (catchup) | `EcowittNetCatchup` (Ecowitt.net), `EcowittDeviceCatchup` (SD card) |
+| Polling | `EcowittHttpCollector`: a thread that polls one device and queues the data |
+| Device access | `EcowittHttpApi`, `EcowittHttpParser`, `EcowittSensors`, `EcowittDevice` (HTTP); `EcowittTcpApi`, `EcowittTcpDevice` (GW1000 TCP API); `make_device` |
+| Utilities and command line | `define_units`, `log_long`, `log_dict`, `flatten` …, `DirectEcowittDevice`, `main` |
+
+### One gateway: GatewaySource
+
+Everything that belongs to one gateway is in a `GatewaySource`: its settings, its field map
+(`HttpMapper`), its collector thread, its catchup settings and source, its status (`SourceStatus`:
+online or not, since when, the last error) and its log lines. The driver and the service each have
+one, as `self.source` (`EcowittCommon` creates it); `driver.collector`, `driver.mapper` and the other
+`ecowitt_http.py` attribute names still work and lead to it. This is what a multi-gateway mode will
+build on: one `GatewaySource` per gateway, and something to merge their packets.
+
+A poll goes like this: the collector's thread calls the device, flattens the responses into one
+dict (`common_list.0x02.val`, `ch_aisle.1.temp` …), applies the sensor map and queues the dict (or an
+exception if the poll failed). `GatewaySource.get()` takes the next item off the queue and updates
+the status; `GatewaySource.loop_packet()` maps a data dict to a loop packet in the gateway's unit
+system (METRICWX), with `gateway_online = 1`. The driver yields that packet. The service keeps the
+newest fresh dict, maps it with `GatewaySource.mapped()`, converts it to the main driver's units,
+adds the fields the packet doesn't have and sets `gateway_online` (`GatewaySource.online()`).
+`mapped()` is where `ignore_no_signal` (`drop_no_signal()`) and `[[limits]]` (`FieldLimits`) apply.
+WeeWX `rain` is worked out by `[StdWXCalculate]` from the gateway's yearly total (`t_rainyear` or
+`p_rainyear`). Catchup goes through `GatewaySource.history()`, which gives archive records in the
+same form from the SD card or Ecowitt.net (`catchup_factory()` picks the source), with the sensor
+map and limits applied, and checks their interval against `archive_interval` (which the loader
+passes to the driver as `std_archive_interval`).
+
+## Releases
+
+The version is in `DRIVER_VERSION` and the header of the driver, in `install.py` (`DRIVER_VERSION`),
+in the README's first line and in `CHANGELOG.md`. `tests/test_installer.py` checks that the driver and
+the installer agree.
+
+To make a release:
+
+1. Set the version in `DRIVER_VERSION` and the header of the driver (version line and revision
+   history, with the date), in `install.py` (the same places), in the README's first line and as a
+   new `CHANGELOG.md` heading.
+2. `python3 tools/md_to_txt.py`, then run the tests.
+3. Build the zip from the tag: `git archive --prefix=weewx-ecowittGateway/ -o
+   weewx-ecowittGateway-X.Y.Z.zip vX.Y.Z` (WeeWX installs only the files `install.py` lists).
+4. Tag the release `vX.Y.Z`.

@@ -38,9 +38,14 @@ def test_accumulator_entries_follow_the_field_map(egw):
     for field in ('rainRate', 'p_rainrate', 'outTemp', 'ws90_volt', 'pm25_ch1_real'):
         assert field not in accum, field       # averaged
     renamed = {'wn32_batt', 'wn32_sig', 'wn32p_batt', 'wn32p_sig'}     # wn32_indoor/wn32_outdoor
-    assert set(accum) - set(fmap) == set(egw.ACCUMULATOR_SUM) | renamed
+    # and the station database columns some fields go to with the additions database on
+    assert set(accum) - set(fmap) == set(egw.ACCUMULATOR_SUM) | renamed | set(egw.STATION_COLUMNS)
     for name in egw.ECOWITT_HTTP_ACCUMULATOR_LAST:
-        assert name not in accum
+        assert name not in accum or name in fmap or name in egw.STATION_COLUMNS
+    for name in ('co2_24h_avg', 'pm2_51_24h_avg', 'pm2_55_24h_avg', 'pm10_24h_avg', 'pm25_co2_24h'):
+        assert accum[name]['extractor'] == 'last', name
+    for name in ('pm1_0', 'pm25_co2_real', 'co2_temp', 'co2_in'):
+        assert name not in accum, name       # averaged
 
 
 def test_installer_adds_the_drivers_accumulator_entries(egw):
@@ -233,6 +238,38 @@ def test_pm2_5_fallback_in_catchup_records(source):
     record = {'pm2_55': 7.0}
     source.pm25_fallback(record)
     assert record['pm2_5'] == 7.0
+
+
+# ------------------------------------------------------------------ air quality
+
+
+def test_air_quality_fields(source):
+    """Everything the WH45/WH46 and WH41/WH43 report is mapped: the 24 hour averages, the AQIs and the
+    WH45/WH46's temperature and humidity; WH46 PM1.0 goes to the standard pm1_0 column."""
+    data = source.mapped({'co2.CO2': 612.0, 'co2.CO2_24H': 580.0, 'co2.temp': 20.9, 'co2.humidity': 47.0,
+                          'co2.PM25': 4.0, 'co2.PM25_24H': 5.1, 'co2.PM25_RealAQI': 17.0,
+                          'co2.PM25_24HAQI': 21.0, 'co2.PM10': 6.0, 'co2.PM10_24H': 6.5,
+                          'co2.PM10_RealAQI': 6.0, 'co2.PM10_24HAQI': 6.0, 'co2.PM1': 2.0, 'co2.PM1_24H': 2.5,
+                          'co2.PM4': 5.0, 'co2.PM4_24H': 5.5, 'ch_pm25.2.PM25': 9.0, 'ch_pm25.2.PM25_24H': 8.5})
+    assert {k: v for k, v in data.items() if k != 'usUnits'} == {
+        'co2': 612.0, 'co2_24h_avg': 580.0, 'co2_temp': 20.9, 'co2_humidity': 47.0,
+        'pm2_55': 4.0, 'pm2_5': 4.0, 'pm2_55_24h_avg': 5.1, 'pm25_co2_real': 17.0, 'pm25_co2_24h': 21.0,
+        'pm10_0': 6.0, 'pm10_24h_avg': 6.5, 'pm10_co2_real': 6.0, 'pm10_co2_24h': 6.0,
+        'pm1_0': 2.0, 'pm1_0_24h_avg': 2.5, 'pm4_0': 5.0, 'pm4_0_24h_avg': 5.5,
+        'pm2_52': 9.0, 'pm2_52_24h_avg': 8.5}
+
+
+def test_wh41_24_hour_average_is_parsed(egw):
+    parsed = egw.EcowittHttpParser.process_ch_pm25_array(
+        [{'channel': '1', 'PM25': '6.0', 'PM25_RealAQI': '25', 'PM25_24HAQI': '22', 'PM25_24H': '5.3'}])
+    assert parsed == [{'channel': 1, 'PM25': 6.0, 'PM25_RealAQI': 25, 'PM25_24HAQI': 22, 'PM25_24H': 5.3}]
+
+
+def test_co2_from_the_console_without_a_wh45(source):
+    data = source.mapped({'wh25.CO2': 495, 'wh25.CO2_24H': 538})
+    assert data['co2'] == 495 and data['co2_in'] == 495 and data['co2_in_24h_avg'] == 538
+    both = source.mapped({'wh25.CO2': 495, 'co2.CO2': 612.0})
+    assert both['co2'] == 612.0 and both['co2_in'] == 495
 
 # ------------------------------------------------------------------ WeeWX 'rain'
 

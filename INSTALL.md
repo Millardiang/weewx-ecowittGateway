@@ -124,8 +124,10 @@ Restart WeeWX to start using the new settings.
 - **Additions database:** the WeeWX database only stores fields it has a column for, and has none
   for the Ecowitt-specific ones (`t_rainday`, `wh40_batt` …). Answer **y** (the default) to archive
   those in `ecowitt_additions.sdb`, next to `weewx.sdb`, with a column added for each the first time
-  it has a value. Skins use them with `$day($data_binding='ecowitt_binding').wh40_batt.min` and the
-  like. See *Fields, the database and [Accumulator]* in the README.
+  it has a value. The standard columns the Seasons skin shows (`inTempBatteryStatus`,
+  `rainBatteryStatus`, `batteryStatus1` …) are filled from the fields with the same purpose. Skins
+  use the rest by name, like any other field (`$day.wh40_batt.min`). See *Fields, the database and
+  [Accumulator]* in the README.
 - **radiation:** the light sensor measures illuminance (lux), recorded in `illuminance`. Answer **y**
   to also record WeeWX's `radiation` (W/m²), worked out with Ecowitt's factor (126.7 lux per W/m²),
   Standard skins show `radiation`, and WeeWX needs it to work out evapotranspiration (`ET`). The

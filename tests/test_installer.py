@@ -350,7 +350,8 @@ def test_existing_sources_are_kept(monkeypatch, gateway):
 def test_additions_database_by_default(monkeypatch, gateway):
     env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver', CATCHUP='none')
     conf, lines = run()
-    assert conf['EcowittGateway']['additions'] == {'enable': 'True', 'data_binding': 'ecowitt_binding'}
+    assert conf['EcowittGateway']['additions'] == {'enable': 'True', 'data_binding': 'ecowitt_binding',
+                                                   'use_station_columns': 'True'}
     assert conf['DataBindings']['ecowitt_binding']['schema'] == 'user.weewx-ecowittGateway.ADDITIONS_SCHEMA'
     assert conf['Databases']['ecowitt_sqlite']['database_name'] == 'ecowitt_additions.sdb'
     assert 'user.weewx-ecowittGateway.EcowittAdditions' in conf['Engine']['Services']['archive_services']

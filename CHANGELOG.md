@@ -76,9 +76,21 @@ commit `31bdfe5`). This entry lists what it changes and adds to that driver.
 - **The additions database** (`EcowittAdditions` service, `[[additions]]`): the fields of each
   archive record that the station's database has no column for are archived in
   `ecowitt_additions.sdb`, with a column (and daily summary) added for each the first time it has a
-  value; skins use them through the `ecowitt_binding` data binding. The installer asks (default
-  yes, `ECOWITT_ADDITIONS`).
-- **`pm2_5`** is filled from the WH45/WH46 when there is no WH41/WH43 on channel 1.
+  value. Skins, Seasons included, use them by name like any other field (an xtype looks them up),
+  or through the `ecowitt_binding` data binding. The installer asks (default yes,
+  `ECOWITT_ADDITIONS`).
+- **Seasons skin columns**: the standard columns the Seasons skin shows are filled from the fields
+  with the same purpose: `inTempBatteryStatus`, `outTempBatteryStatus`, `batteryStatus1`–`8` and
+  `signal1`–`8` (WN31), `lightning_distance`, and from battery levels as 0 (OK) / 1 (low),
+  `rainBatteryStatus` (WH40), `hailBatteryStatus` (WS90) and `windBatteryStatus` (WS80/85/90, WH68)
+  (`[[additions]] use_station_columns`).
+- **`pm2_5`** is filled from the WH45/WH46 when there is no WH41/WH43 on channel 1, and **`co2`**
+  from a console's own CO2 sensor (`co2_in`) when there is no WH45/WH46.
+- **Air-quality fields**: the 24-hour averages (`co2_24h_avg`, `pm2_51_24h_avg`–`pm2_55_24h_avg`,
+  `pm10_24h_avg`), the WH45/WH46's AQIs (`pm25_co2_real`, `pm25_co2_24h`, `pm10_co2_real` …), its
+  temperature and humidity (`co2_temp`, `co2_humidity`), the WH46's PM1.0 (`pm1_0`) and PM4.0
+  (`pm4_0`), and a console's own CO2 (`co2_in`) are mapped; the gateway reported them, but the field
+  map left them out.
 - **Catchup**: a warning when the records' interval differs from `archive_interval`, a summary after
   each catchup, `[[catchup]] file_port` for a device behind port forwarding.
 - **`[Accumulator]` entries made from the field map**: counts (`t_rain`, `p_rain`,

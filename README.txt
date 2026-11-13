@@ -390,11 +390,37 @@ EcowittAdditions service archives the fields of each archive record, live and ca
 station's database has no column for in a database of their own, ecowitt_additions.sdb (next to
 weewx.sdb). It needs no setting up: a column, with its daily summary, is added the first time a
 field has a value, so a sensor paired later gets its columns then, and sensors that aren't paired
-add none. Only numbers are stored. Skins use the fields through its data binding, ecowitt_binding:
+add none. Only numbers are stored. Skins, the Seasons skin included, and plots use the fields by
+name as if they were in the station's database (the service registers a WeeWX xtype that looks up
+fields the station's database has no column for in the additions database):
 
-    $current($data_binding='ecowitt_binding').t_rainday
-    $day($data_binding='ecowitt_binding').wh40_batt.min
-    $week($data_binding='ecowitt_binding').pm2_52.avg
+    $current.t_rainday $day.wh40_batt.min $week.pm2_52.avg
+
+so to show one in Seasons, add it to the lists in its skin.conf (observations_current,
+observations_stats, or sensor_batteries for a 0/1 status). $day($data_binding='ecowitt_binding')
+works too.
+
+Standard columns first. The standard columns the Seasons skin shows in Sensor Status are filled from
+the driver fields with the same purpose, so they work without any skin changes:
+
+Station database column  Driver field
+-----------------------  ---------------------------------------------------------------------
+inTempBatteryStatus      wh25_batt (or wn32_batt)
+outTempBatteryStatus     wh26_batt, wn32p_batt or wh69_batt (the gateway's one outdoor sensor)
+rainBatteryStatus        the WH40's battery level
+hailBatteryStatus        the WS90's battery level (its piezo rain gauge)
+windBatteryStatus        the WS80, WS85, WS90 or WH68's battery level
+batteryStatus1–8         wn31_ch1_batt–wn31_ch8_batt
+signal1–8                wn31_ch1_sig–wn31_ch8_sig
+lightning_distance       lightningdist
+
+The *BatteryStatus columns are WeeWX's 0 (OK) or 1 (low). The WH40, WS80/85/90 and WH68 report a
+level instead (0–5, where 0 or 1 is low, 6 on DC power), so their column gets the status and the
+level stays in the driver's field (wh40_batt …); the other fields are renamed to the column. A
+column is used only if it is in the station's database and no field map setting names it, and the
+driver field isn't named in a field map setting. The columns used are logged at startup and listed
+by weectl device --active-map. Set [[additions]] use_station_columns = False to keep the driver's
+names (this works with or without the additions database).
 
 The database is set in [DataBindings] [[ecowitt_binding]] and [Databases] [[ecowitt_sqlite]]
 (SQLite; point the binding at a MySQL database instead if you use one). Uninstalling leaves the
@@ -414,18 +440,40 @@ ws90_volt). The WS69 sensor array is wh69 (the name the gateway uses).
 PM2.5 and air-quality sensors:
 
 WH41/WH43 (PM2.5), channel 1
-    pm2_5, pm25_ch1_real (AQI), pm25_ch1_24h (24-hour AQI), wh41_ch1_batt, wh41_ch1_sig
+    pm2_5, pm2_51_24h_avg (24-hour average), pm25_ch1_real (AQI), pm25_ch1_24h (24-hour AQI),
+    wh41_ch1_batt, wh41_ch1_sig
 
 WH41/WH43, channel n = 2–4
-    pm2_5n, pm25_chn_real, pm25_chn_24h, wh41_chn_batt, wh41_chn_sig
+    pm2_5n, pm2_5n_24h_avg, pm25_chn_real, pm25_chn_24h, wh41_chn_batt, wh41_chn_sig
 
-WH45/WH46 (CO2 and particulates)
-    pm2_55, pm10_0, co2, wh45_batt, wh45_sig
+WH45/WH46, CO2
+    co2 (ppm), co2_24h_avg
 
-Of these, pm2_5, pm10_0 and co2 have columns in the standard database. Without a WH41/WH43 on
-channel 1, pm2_5 is filled from the WH45/WH46, so one PM2.5 sensor shows up in the standard skins
-either way (not if pm2_5 or pm2_55 has been mapped to something else). To use the WH45/WH46 for
-pm2_5 with a WH41/WH43 on channel 1 too:
+WH45/WH46, PM2.5
+    pm2_55, pm2_55_24h_avg, pm25_co2_real (AQI), pm25_co2_24h (24-hour AQI)
+
+WH45/WH46, PM10
+    pm10_0, pm10_24h_avg, pm10_co2_real, pm10_co2_24h
+
+WH46 only, PM1.0 and PM4.0
+    pm1_0, pm1_0_24h_avg, pm1_co2_real, pm1_co2_24h; pm4_0, pm4_0_24h_avg, pm4_co2_real, pm4_co2_24h
+
+WH45/WH46, its own temperature and humidity
+    co2_temp, co2_humidity
+
+WH45/WH46, sensor
+    wh45_batt, wh45_sig
+
+Console or gateway with its own CO2 sensor
+    co2_in, co2_in_24h_avg
+
+Of these, pm2_5, pm10_0, pm1_0 and co2 have columns in the standard database; the rest (the AQIs,
+the 24-hour averages, PM4.0 and the WH45/WH46's temperature and humidity) go to the additions
+database (the standard database has no AQI column; the _real and _24h fields are the AQIs the
+gateway calculates). Without a WH41/WH43 on channel 1, pm2_5 is filled from the WH45/WH46, so one
+PM2.5 sensor shows up in the standard skins either way (not if pm2_5 or pm2_55 has been mapped to
+something else). Likewise co2 is filled from co2_in when there is no WH45/WH46. To use the WH45/WH46
+for pm2_5 with a WH41/WH43 on channel 1 too:
 
     [EcowittGateway] [[field_map_extensions]] pm2_5 = co2.PM25             # the WH45/WH46; pm2_55
     is then empty pm2_51 = ch_pm25.1.PM25      # channel 1, in a field of its own (add the column)

@@ -164,10 +164,16 @@ ecowitt_config = """
     # Archive the fields the WeeWX database has no column for (Ecowitt-specific
     # fields such as t_rainday or wh40_batt) in a database of their own, with
     # a column added for each the first time it has a value. Skins use them
-    # with $day($data_binding='ecowitt_binding').wh40_batt.last and the like.
+    # by name like any other field ($day.wh40_batt.last).
+    # use_station_columns (on or off with or without the additions database)
+    # fills the standard columns the Seasons skin shows from the fields with
+    # the same purpose: wh25_batt to inTempBatteryStatus, wn31_ch1_batt to
+    # batteryStatus1, the WH40 battery level to rainBatteryStatus (0 OK, 1 low)
+    # and so on.
     [[additions]]
         enable = False
         data_binding = ecowitt_binding
+        use_station_columns = True
 
 [DataBindings]
     # the fields the WeeWX database has no column for (EcowittAdditions)
@@ -211,11 +217,39 @@ ecowitt_config = """
         extractor = last
     [[lightningcount]]
         extractor = last
+    [[co2_24h_avg]]
+        extractor = last
+    [[pm2_55_24h_avg]]
+        extractor = last
+    [[pm25_co2_24h]]
+        extractor = last
+    [[pm10_24h_avg]]
+        extractor = last
+    [[pm10_co2_24h]]
+        extractor = last
+    [[pm1_0_24h_avg]]
+        extractor = last
+    [[pm1_co2_24h]]
+        extractor = last
+    [[pm4_0_24h_avg]]
+        extractor = last
+    [[pm4_co2_24h]]
+        extractor = last
+    [[co2_in_24h_avg]]
+        extractor = last
+    [[pm2_51_24h_avg]]
+        extractor = last
     [[pm25_ch1_24h]]
+        extractor = last
+    [[pm2_52_24h_avg]]
         extractor = last
     [[pm25_ch2_24h]]
         extractor = last
+    [[pm2_53_24h_avg]]
+        extractor = last
     [[pm25_ch3_24h]]
+        extractor = last
+    [[pm2_54_24h_avg]]
         extractor = last
     [[pm25_ch4_24h]]
         extractor = last
@@ -508,6 +542,50 @@ ecowitt_config = """
     [[wn32p_batt]]
         extractor = last
     [[wn32p_sig]]
+        extractor = last
+    [[inTempBatteryStatus]]
+        extractor = last
+    [[outTempBatteryStatus]]
+        extractor = last
+    [[rainBatteryStatus]]
+        extractor = last
+    [[hailBatteryStatus]]
+        extractor = last
+    [[windBatteryStatus]]
+        extractor = last
+    [[lightning_distance]]
+        extractor = last
+    [[batteryStatus1]]
+        extractor = last
+    [[batteryStatus2]]
+        extractor = last
+    [[batteryStatus3]]
+        extractor = last
+    [[batteryStatus4]]
+        extractor = last
+    [[batteryStatus5]]
+        extractor = last
+    [[batteryStatus6]]
+        extractor = last
+    [[batteryStatus7]]
+        extractor = last
+    [[batteryStatus8]]
+        extractor = last
+    [[signal1]]
+        extractor = last
+    [[signal2]]
+        extractor = last
+    [[signal3]]
+        extractor = last
+    [[signal4]]
+        extractor = last
+    [[signal5]]
+        extractor = last
+    [[signal6]]
+        extractor = last
+    [[signal7]]
+        extractor = last
+    [[signal8]]
         extractor = last
     # End weewx-ecowittGateway extractors
 """

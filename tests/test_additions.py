@@ -11,6 +11,15 @@ import weewx
 import weewx.manager
 
 
+@pytest.fixture(autouse=True)
+def restore_xtypes():
+    """Each EcowittAdditions adds its AdditionsXType; WeeWX runs one."""
+    import weewx.xtypes
+    saved = list(weewx.xtypes.xtypes)
+    yield
+    weewx.xtypes.xtypes[:] = saved
+
+
 def config(tmp_path, enable=True):
     return configobj.ConfigObj({
         'WEEWX_ROOT': str(tmp_path),
@@ -124,3 +133,143 @@ def test_an_error_never_stops_weewx(station, monkeypatch, caplog):
     monkeypatch.setattr(service, 'binding', 'no_such_binding')
     engine.archive(record(1_700_000_100, wh40_batt=1.6))
     assert any('could not archive the additional fields' in m for m in caplog.messages)
+
+
+# ---- driver fields that go to a matching station database column first ----
+
+@pytest.fixture
+def columns_map(egw):
+    """Leave FieldMapper.station_columns as it was."""
+    saved = egw.FieldMapper.station_columns
+    yield egw
+    egw.FieldMapper.station_columns = saved
+
+
+def test_station_columns_reads_the_schema_when_there_is_no_database_yet(egw, tmp_path):
+    columns = egw.station_columns(config(tmp_path))
+    assert {'inTempBatteryStatus', 'batteryStatus1', 'signal8', 'lightning_distance'} <= columns
+    assert not (tmp_path / 'weewx.sdb').exists()
+
+
+def test_station_columns_reads_the_database(egw, tmp_path):
+    conf = config(tmp_path)
+    with weewx.manager.open_manager_with_config(conf, 'wx_binding', initialize=True) as manager:
+        manager.add_column('wh40_batt', 'REAL')
+    assert 'wh40_batt' in egw.station_columns(conf)
+
+
+def test_station_column_map(egw, tmp_path):
+    conf = config(tmp_path)
+    found = egw.station_column_map(conf)
+    assert found['inTempBatteryStatus'] == ('wh25_batt', 'wn32_batt')
+    assert found['outTempBatteryStatus'] == ('wh26_batt', 'wn32p_batt', 'wh69_batt')
+    assert found['batteryStatus3'] == ('wn31_ch3_batt',) and found['signal3'] == ('wn31_ch3_sig',)
+    assert found['lightning_distance'] == ('lightningdist',)
+    assert found['rainBatteryStatus'] == ('wh40_batt',) and found['hailBatteryStatus'] == ('ws90_batt',)
+    assert found['windBatteryStatus'] == ('ws80_batt', 'ws85_batt', 'ws90_batt', 'wh68_batt')
+    assert set(found) == set(egw.STATION_COLUMNS)
+
+
+def test_station_column_map_with_or_without_the_additions_database(egw, tmp_path):
+    assert egw.station_column_map(config(tmp_path, enable=False)) == egw.station_column_map(config(tmp_path))
+    conf = config(tmp_path)
+    conf['EcowittGateway']['additions']['use_station_columns'] = 'False'
+    assert egw.station_column_map(conf) == {}
+
+
+def test_station_column_map_leaves_columns_and_fields_the_user_mapped(egw, tmp_path):
+    conf = config(tmp_path)
+    conf['EcowittGateway']['field_map_extensions'] = {'batteryStatus1': 'wh57.battery',
+                                                      'wn31_ch2_batt': 'wn31.ch2.battery'}
+    found = egw.station_column_map(conf)
+    assert 'batteryStatus1' not in found
+    assert 'batteryStatus2' not in found
+
+
+def test_station_column_map_leaves_fields_the_database_has(egw, tmp_path):
+    conf = config(tmp_path)
+    found = egw.station_column_map(conf, columns=egw.station_columns(conf) | {'wh25_batt'})
+    assert found['inTempBatteryStatus'] == ('wn32_batt',)
+    found = egw.station_column_map(conf, columns=egw.station_columns(conf) - {'signal4'})
+    assert 'signal4' not in found
+
+
+def test_mapped_data_uses_the_station_columns(columns_map, tmp_path):
+    egw = columns_map
+    egw.use_station_columns(config(tmp_path))
+    mapper = egw.HttpMapper(driver_debug=egw.DebugOptions(), quiet=True)
+    data = mapper.map_data({'wh25.battery': 0, 'wh69.battery': 1, 'wn31.ch1.battery': 0, 'wn31.ch1.signal': 4,
+                            'wn31.ch5.battery': 1, 'lightning.distance': 12, 'wh40.battery': 5})
+    # battery levels keep their field and add the 0 (OK) / 1 (low) status
+    assert data == {'inTempBatteryStatus': 0, 'outTempBatteryStatus': 1, 'batteryStatus1': 0,
+                    'signal1': 4, 'batteryStatus5': 1, 'lightning_distance': 12, 'wh40_batt': 5,
+                    'rainBatteryStatus': 0}
+    data = mapper.map_data({'ws90.battery': 1, 'wh40.battery': 6})
+    assert data == {'ws90_batt': 1, 'hailBatteryStatus': 1, 'windBatteryStatus': 1, 'wh40_batt': 6,
+                    'rainBatteryStatus': 0}
+    # nothing renamed when turned off
+    conf = config(tmp_path)
+    conf['EcowittGateway']['additions']['use_station_columns'] = 'False'
+    egw.use_station_columns(conf)
+    assert mapper.map_data({'wh25.battery': 0}) == {'wh25_batt': 0}
+
+
+@pytest.mark.parametrize('level, status', [(0, 1), (1, 1), (2, 0), (5, 0), (6, 0), (9, None), (None, None)])
+def test_battery_status(egw, level, status):
+    assert egw.battery_status(level) == status
+
+
+def test_station_columns_keep_their_last_value(egw):
+    extractors = egw.accumulator_extractors()
+    for column in egw.STATION_COLUMNS:
+        assert extractors[column] == 'last'
+
+
+def test_station_columns_stay_out_of_the_additions_database(columns_map, tmp_path):
+    egw = columns_map
+    conf = config(tmp_path)
+    egw.use_station_columns(conf)
+    engine = Engine(conf)
+    egw.EcowittAdditions(engine, conf)
+    mapper = egw.HttpMapper(driver_debug=egw.DebugOptions(), quiet=True)
+    data = mapper.map_data({'wh25.battery': 1, 'wn31.ch2.signal': 3, 'wh40.battery': 4})
+    engine.archive(record(1_700_000_100, **data))
+    engine.db_binder.close()
+    assert rows(tmp_path / 'weewx.sdb', 'SELECT inTempBatteryStatus, signal2, rainBatteryStatus FROM archive') \
+        == [(1.0, 3.0, 0.0)]
+    db = tmp_path / 'ecowitt_additions.sdb'
+    assert [c[1] for c in rows(db, 'PRAGMA table_info(archive)')] == ['dateTime', 'usUnits', 'interval',
+                                                                      'wh40_batt']
+
+
+# ---- skins find the additions database's fields by name ----
+
+def test_skins_read_additions_fields_by_name(egw, tmp_path):
+    import weewx.xtypes
+    from weeutil.weeutil import TimeSpan
+    conf = config(tmp_path)
+    engine = Engine(conf)
+    service = egw.EcowittAdditions(engine, conf)
+    try:
+        assert service.xtype in weewx.xtypes.xtypes
+        engine.archive(record(1_700_000_100, wh40_batt=4, co2_temp=20.5))
+        engine.archive(record(1_700_000_400, wh40_batt=3, co2_temp=21.5))
+        main = engine.db_binder.get_manager('wx_binding')
+        # as $current does: not in the station's record, so the xtypes are asked
+        rec = main.getRecord(1_700_000_400)
+        assert 'wh40_batt' not in rec
+        assert weewx.xtypes.get_scalar('wh40_batt', rec, main)[0] == 3
+        span = TimeSpan(1_700_000_000, 1_700_000_400)
+        assert weewx.xtypes.get_aggregate('co2_temp', span, 'max', main)[0] == 21.5
+        assert weewx.xtypes.has_data('co2_temp', span, main)
+        assert not weewx.xtypes.has_data('wh40_batt', TimeSpan(1_600_000_000, 1_600_000_400), main)
+        times, _, values = weewx.xtypes.get_series('wh40_batt', span, main)
+        assert values[0] == [4, 3]
+        # unknown fields stay unknown
+        with pytest.raises(weewx.UnknownType):
+            service.xtype.get_scalar('nosuchfield', rec, main)
+    finally:
+        service.shutDown()
+        service.xtype.shut_down()
+        engine.db_binder.close()
+    assert service.xtype not in weewx.xtypes.xtypes

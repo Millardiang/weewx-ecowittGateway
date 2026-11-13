@@ -156,7 +156,9 @@ import weeutil.logger
 import weewx.defaults
 import weewx.drivers
 import weewx.engine
+import weewx.manager
 import weewx.units
+import weewx.xtypes
 import weewx.wxformulas
 from weeutil.weeutil import bcolors, timestamp_to_string
 
@@ -334,8 +336,8 @@ DEFAULT_GROUPS = {
     'wh25.inhumi': 'group_percent',
     'wh25.abs': 'group_pressure',
     'wh25.rel': 'group_pressure',
-#    'wh25.CO2': 'group_fraction',
-#    'wh25.CO2_24H': 'group_fraction',
+    'wh25.CO2': 'group_fraction',
+    'wh25.CO2_24H': 'group_fraction',
     'lightning.distance': 'group_distance',
     'lightning.timestamp': 'group_time',
     'lightning.count': 'group_count',
@@ -349,6 +351,12 @@ DEFAULT_GROUPS = {
     'co2.PM10_24HAQI': 'group_count',
     'co2.CO2': 'group_fraction',
     'co2.CO2_24H': 'group_fraction',
+    'co2.PM25_24H': 'group_concentration',
+    'co2.PM10_24H': 'group_concentration',
+    **{f'co2.{pm}{suffix}': group for pm in ('PM1', 'PM4')
+       for suffix, group in (('', 'group_concentration'), ('_24H', 'group_concentration'),
+                             ('_RealAQI', 'group_count'), ('_24HAQI', 'group_count'))},
+    **{f'ch_pm25.{ch}.PM25_24H': 'group_concentration' for ch in range(1, 5)},
 #    'co2.battery': 'group_count',
     'ch_pm25.1.PM25': 'group_concentration',
     'ch_pm25.1.PM25_RealAQI': 'group_count',
@@ -878,7 +886,13 @@ class FieldMapper:
         debug: optional DebugOptions object containing debug options
         mapper_config: optional dict containing, among others, the field map and
                        field map extensions definitions
+
+    station_columns ({station database column: (driver fields)}, set by
+    use_station_columns()) renames, in mapped data, the first of the driver
+    fields present to the station database column.
     """
+
+    station_columns = {}
 
     def __init__(self, driver_debug=None, default_map=None, **mapper_config):
         """Initialise a FieldMapper object."""
@@ -1000,9 +1014,25 @@ class FieldMapper:
                     mapped_data[dest_field] = rec.get(source_field)
             if unit_system is not None:
                 mapped_data['usUnits'] = unit_system
-            return mapped_data
+            return self.to_station_columns(mapped_data)
         else:
             return rec
+
+    @classmethod
+    def to_station_columns(cls, data):
+        """Rename the fields of data that go to a station database column, or
+        for a battery level, add the status (see use_station_columns()).
+        Changes and returns data."""
+
+        for column, fields in cls.station_columns.items():
+            for field in fields:
+                if field in data:
+                    if column in BATTERY_LEVEL_COLUMNS:
+                        data[column] = battery_status(data[field])
+                    else:
+                        data[column] = data.pop(field)
+                    break
+        return data
 
 
 # ============================================================================
@@ -1090,18 +1120,41 @@ class HttpMapper(FieldMapper):
         'extraTemp15': 'ch_temp.7.temp',
         'extraTemp16': 'ch_temp.8.temp',
         'co2': 'co2.CO2',
+        'co2_24h_avg': 'co2.CO2_24H',
+        'co2_temp': 'co2.temp',
+        'co2_humidity': 'co2.humidity',
         'pm2_55': 'co2.PM25',
+        'pm2_55_24h_avg': 'co2.PM25_24H',
+        'pm25_co2_real': 'co2.PM25_RealAQI',
+        'pm25_co2_24h': 'co2.PM25_24HAQI',
         'pm10_0': 'co2.PM10',
+        'pm10_24h_avg': 'co2.PM10_24H',
+        'pm10_co2_real': 'co2.PM10_RealAQI',
+        'pm10_co2_24h': 'co2.PM10_24HAQI',
+        'pm1_0': 'co2.PM1',
+        'pm1_0_24h_avg': 'co2.PM1_24H',
+        'pm1_co2_real': 'co2.PM1_RealAQI',
+        'pm1_co2_24h': 'co2.PM1_24HAQI',
+        'pm4_0': 'co2.PM4',
+        'pm4_0_24h_avg': 'co2.PM4_24H',
+        'pm4_co2_real': 'co2.PM4_RealAQI',
+        'pm4_co2_24h': 'co2.PM4_24HAQI',
+        'co2_in': 'wh25.CO2',
+        'co2_in_24h_avg': 'wh25.CO2_24H',
         'pm2_5': 'ch_pm25.1.PM25',
+        'pm2_51_24h_avg': 'ch_pm25.1.PM25_24H',
         'pm25_ch1_real': 'ch_pm25.1.PM25_RealAQI',
         'pm25_ch1_24h': 'ch_pm25.1.PM25_24HAQI',
         'pm2_52': 'ch_pm25.2.PM25',
+        'pm2_52_24h_avg': 'ch_pm25.2.PM25_24H',
         'pm25_ch2_real': 'ch_pm25.2.PM25_RealAQI',
         'pm25_ch2_24h': 'ch_pm25.2.PM25_24HAQI',
         'pm2_53': 'ch_pm25.3.PM25',
+        'pm2_53_24h_avg': 'ch_pm25.3.PM25_24H',
         'pm25_ch3_real': 'ch_pm25.3.PM25_RealAQI',
         'pm25_ch3_24h': 'ch_pm25.3.PM25_24HAQI',
         'pm2_54': 'ch_pm25.4.PM25',
+        'pm2_54_24h_avg': 'ch_pm25.4.PM25_24H',
         'pm25_ch4_real': 'ch_pm25.4.PM25_RealAQI',
         'pm25_ch4_24h': 'ch_pm25.4.PM25_24HAQI',
         'soilMoist1': 'ch_soil.1.humidity',
@@ -1599,7 +1652,7 @@ class SdMapper(FieldMapper):
                     if self.driver_debug.catchup:
                         log.info("Error mapping field '%s': %s", field, e)
                     continue
-            return mapped_rec
+            return self.to_station_columns(mapped_rec)
         else:
             return rec
 
@@ -2138,6 +2191,99 @@ ADDITIONS_SCHEMA = {
 ADDITIONS_BINDING = 'ecowitt_binding'
 COLUMN_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*$')
 
+# Standard WeeWX columns (the ones the Seasons skin shows) that serve the same
+# purpose as a driver field: {column: driver fields, first preferred}. A
+# gateway has one outdoor temperature sensor (WH26, WN32P or an array), so they
+# share one column.
+STATION_COLUMNS = dict(
+    {'inTempBatteryStatus': ('wh25_batt', 'wn32_batt'),
+     'outTempBatteryStatus': ('wh26_batt', 'wn32p_batt', 'wh69_batt'),
+     'rainBatteryStatus': ('wh40_batt',),
+     'hailBatteryStatus': ('ws90_batt',),
+     'windBatteryStatus': ('ws80_batt', 'ws85_batt', 'ws90_batt', 'wh68_batt'),
+     'lightning_distance': ('lightningdist',)},
+    **{f'batteryStatus{n}': (f'wn31_ch{n}_batt',) for n in range(1, 9)},
+    **{f'signal{n}': (f'wn31_ch{n}_sig',) for n in range(1, 9)})
+# WeeWX's *BatteryStatus columns are 0 (OK) or 1 (low). These sensors report a
+# level instead (0-5, 0 or 1 low, 6 on DC power), so the column gets the status
+# worked out from it and the level stays in the driver's field.
+BATTERY_LEVEL_COLUMNS = ('rainBatteryStatus', 'hailBatteryStatus', 'windBatteryStatus')
+
+
+def battery_status(level):
+    """WeeWX's battery status, 0 (OK) or 1 (low), for an Ecowitt battery level;
+    None if the level isn't one."""
+
+    if isinstance(level, (int, float)) and 0 <= level <= 6:
+        return 1 if level <= 1 else 0
+    return None
+
+
+def station_columns(config_dict):
+    """The columns of the station's database ([StdArchive] data_binding), or
+    of its schema if the database can't be opened (not made yet). None if
+    neither can be read."""
+
+    binding = (config_dict.get('StdArchive') or {}).get('data_binding', 'wx_binding')
+    try:
+        manager_dict = weewx.manager.get_manager_dict_from_config(config_dict, binding)
+    except Exception as e:
+        log.debug('Could not read data binding %s: %s', binding, e)
+        return None
+    try:
+        with weewx.manager.open_manager(manager_dict) as manager:
+            return set(manager.sqlkeys)
+    except Exception:
+        pass
+    schema = manager_dict.get('schema')
+    if isinstance(schema, str):
+        try:
+            schema = weeutil.weeutil.get_object(schema)
+        except Exception:
+            return None
+    table = schema.get('table') if isinstance(schema, dict) else schema
+    try:
+        return {column[0] for column in table}
+    except TypeError:
+        return None
+
+
+def station_column_map(config_dict, columns=None):
+    """{station database column: driver fields} for the STATION_COLUMNS
+    entries this station can use, unless [[additions]] use_station_columns is
+    False: the column is in the station's database (columns, default
+    station_columns()) and no field map setting names it, and the driver fields
+    have no column there themselves and aren't named in a field map setting.
+    (A battery level keeps its field, so its column of its own doesn't stop
+    the status going to the station column.)"""
+
+    conf = driver_config(config_dict).get('additions') or {}
+    if not weeutil.weeutil.tobool(conf.get('use_station_columns', True)):
+        return {}
+    columns = station_columns(config_dict) if columns is None else columns
+    if not columns:
+        return {}
+    configured = configured_fields(config_dict)
+    named = configured | set(HttpMapper.default_map)
+    result = {}
+    for column, fields in STATION_COLUMNS.items():
+        fields = tuple(f for f in fields if f not in configured
+                       and (f not in columns or column in BATTERY_LEVEL_COLUMNS))
+        if column in columns and column not in named and fields:
+            result[column] = fields
+    return result
+
+
+def use_station_columns(config_dict, label=DRIVER_NAME):
+    """Have the driver's field maps put the fields station_column_map() finds
+    in their station database columns, and log them. Returns the map."""
+
+    FieldMapper.station_columns = station_column_map(config_dict)
+    if FieldMapper.station_columns:
+        log.info('%s: using station database columns %s', label,
+                 ', '.join(f"{c} ({' or '.join(f)})" for c, f in FieldMapper.station_columns.items()))
+    return FieldMapper.station_columns
+
 
 class EcowittAdditions(weewx.engine.StdService):
     """Archive the fields of each archive record that the station's database
@@ -2148,9 +2294,10 @@ class EcowittAdditions(weewx.engine.StdService):
     data_binding) keeps the ones it has columns for. The rest (numbers only)
     go to [[additions]] data_binding (default ecowitt_binding,
     ecowitt_additions.sdb), which gets a column, with a daily summary, the
-    first time a field has a value. Skins use them with that binding, eg
-    $day($data_binding='ecowitt_binding').wh40_batt.last. Off unless
-    [[additions]] enable is set; an error is logged and never stops WeeWX.
+    first time a field has a value. Skins use them by name like any other
+    field (AdditionsXType), eg $day.wh40_batt.last, or with that binding. Off
+    unless [[additions]] enable is set; an error is logged and never stops
+    WeeWX.
     """
 
     def __init__(self, engine, config_dict):
@@ -2159,10 +2306,17 @@ class EcowittAdditions(weewx.engine.StdService):
         self.enabled = weeutil.weeutil.tobool(conf.get('enable', False))
         self.binding = conf.get('data_binding', ADDITIONS_BINDING)
         self.main_binding = (config_dict.get('StdArchive') or {}).get('data_binding', 'wx_binding')
+        self.xtype = None
         if self.enabled:
             self.bind(weewx.NEW_ARCHIVE_RECORD, self.new_archive_record)
             log.info("EcowittAdditions: fields the %s database has no column for are archived "
                      "with %s", self.main_binding, self.binding)
+            self.xtype = AdditionsXType(config_dict, self.binding)
+            weewx.xtypes.xtypes.append(self.xtype)
+
+    def shutDown(self):
+        if self.xtype in weewx.xtypes.xtypes:
+            weewx.xtypes.xtypes.remove(self.xtype)
 
     def new_archive_record(self, event):
         try:
@@ -2191,6 +2345,80 @@ class EcowittAdditions(weewx.engine.StdService):
         values = {k: v for k, v in extra.items() if k in manager.sqlkeys}
         manager.addRecord(dict(values, dateTime=record['dateTime'], usUnits=record['usUnits'],
                                interval=record['interval']))
+
+
+class AdditionsXType(weewx.xtypes.XType):
+    """Lets skins use the additions database's fields by name, as if they were
+    in the station's database: $current.wh40_batt, $day.co2_temp.max, plots.
+
+    Asked about a field the database being queried has no column for, it
+    answers from the additions database ([[additions]] data_binding) if that
+    has the column. Each thread (reports run in their own) opens its own
+    connection; the columns are read again at most every COLUMNS_REFRESH
+    seconds, as EcowittAdditions adds them."""
+
+    COLUMNS_REFRESH = 300
+
+    def __init__(self, config_dict, binding):
+        self.config_dict = config_dict
+        self.binding = binding
+        self.local = threading.local()
+
+    def manager(self, obs_type):
+        """The additions database's manager if it has a column obs_type, else
+        None."""
+
+        local = self.local
+        now = time.time()
+        if getattr(local, 'manager', None) is None:
+            if now - getattr(local, 'tried', 0) < self.COLUMNS_REFRESH:
+                return None
+            local.tried = now
+            try:
+                local.manager = weewx.manager.open_manager_with_config(self.config_dict, self.binding)
+                local.read = now
+            except Exception:
+                return None
+        manager = local.manager
+        if obs_type not in manager.sqlkeys and now - local.read >= self.COLUMNS_REFRESH:
+            local.read = now
+            try:
+                manager.sqlkeys = manager.connection.columnsOf(manager.table_name)
+                manager._sync()
+            except Exception as e:
+                log.debug('AdditionsXType: could not read the columns: %s', e)
+        return manager if obs_type in manager.sqlkeys else None
+
+    def _source(self, obs_type, db_manager):
+        if db_manager is None or obs_type in db_manager.sqlkeys:
+            raise weewx.UnknownType(obs_type)
+        manager = self.manager(obs_type)
+        if manager is None or manager.database_name == db_manager.database_name:
+            raise weewx.UnknownType(obs_type)
+        return manager
+
+    def get_scalar(self, obs_type, record, db_manager=None, **option_dict):
+        manager = self._source(obs_type, db_manager)
+        if not record:
+            raise weewx.CannotCalculate(obs_type)
+        found = manager.getRecord(record['dateTime']) or {}
+        return weewx.units.as_value_tuple({'usUnits': record['usUnits'], obs_type: found.get(obs_type)},
+                                          obs_type)
+
+    def get_series(self, obs_type, timespan, db_manager, aggregate_type=None,
+                   aggregate_interval=None, **option_dict):
+        return weewx.xtypes.get_series(obs_type, timespan, self._source(obs_type, db_manager),
+                                       aggregate_type, aggregate_interval, **option_dict)
+
+    def get_aggregate(self, obs_type, timespan, aggregate_type, db_manager, **option_dict):
+        return weewx.xtypes.get_aggregate(obs_type, timespan, aggregate_type,
+                                          self._source(obs_type, db_manager), **option_dict)
+
+    def shut_down(self):
+        manager = getattr(self.local, 'manager', None)
+        if manager is not None:
+            manager.close()
+            self.local.manager = None
 
 
 # ============================================================================
@@ -2306,6 +2534,7 @@ class GatewaySource:
         # mapped to something else
         fmap = self.mapper.field_map
         self.pm25_from_wh45 = fmap.get('pm2_5') == 'ch_pm25.1.PM25' and fmap.get('pm2_55') == 'co2.PM25'
+        self.co2_from_indoor = fmap.get('co2') == 'co2.CO2' and fmap.get('co2_in') == 'wh25.CO2'
         # WeeWX radiation (W/m2) worked out from illuminance (lux), if
         # radiation_from_illuminance is set and radiation isn't mapped to
         # something
@@ -2485,10 +2714,13 @@ class GatewaySource:
         return mapped_data
 
     def pm25_fallback(self, record):
-        """pm2_5 from the WH45/WH46 when there is no channel 1 PM2.5 reading."""
+        """pm2_5 from the WH45/WH46 when there is no channel 1 PM2.5 reading,
+        and co2 from the console's own CO2 sensor (co2_in) without a WH45/WH46."""
 
         if self.pm25_from_wh45 and record.get('pm2_5') is None and record.get('pm2_55') is not None:
             record['pm2_5'] = record['pm2_55']
+        if self.co2_from_indoor and record.get('co2') is None and record.get('co2_in') is not None:
+            record['co2'] = record['co2_in']
 
     def derive_radiation(self, record):
         """radiation (W/m2) from illuminance (lux) with Ecowitt's factor
@@ -3382,6 +3614,7 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
         # first will aid in remote debugging.
 
         log.info('EcowittHttpService: version is %s' % DRIVER_VERSION)
+        use_station_columns(config_dict, 'EcowittHttpService')
         self.unit_system = DEFAULT_UNIT_SYSTEM
         try:
             EcowittCommon.__init__(self, unit_system=self.unit_system, label='EcowittHttpService',
@@ -3662,9 +3895,9 @@ def _keeps_last_value(source):
     """True for a device field whose last value in an archive interval is the
     one to keep, not the average: battery and signal states, running rain
     totals, the lightning count, distance and time, the day's maximum wind,
-    the 10 minute average wind direction and 24 hour AQIs."""
+    the 10 minute average wind direction and 24 hour averages and AQIs."""
 
-    if source.endswith(('.battery', '.signal', '_24HAQI')) or source.startswith('lightning.'):
+    if source.endswith(('.battery', '.signal', '_24HAQI', '_24H')) or source.startswith('lightning.'):
         return True
     if source in HttpMapper.default_rain_map.values():
         # a rain rate is averaged
@@ -3683,6 +3916,9 @@ def accumulator_extractors():
         for field, source in mapper.field_map.items():
             if _keeps_last_value(source):
                 extractors.setdefault(field, 'last')
+    for column, fields in STATION_COLUMNS.items():
+        if any(extractors.get(f) == 'last' for f in fields):
+            extractors.setdefault(column, 'last')
     return extractors
 
 
@@ -3820,6 +4056,7 @@ def std_archive_interval(config_dict):
 
 
 def loader(config_dict, engine):
+    use_station_columns(config_dict)
     driver = EcowittHttpDriver(archive_interval=std_archive_interval(config_dict),
                                counters=counter_fields(config_dict),
                                **driver_config(config_dict))
@@ -7237,14 +7474,15 @@ class EcowittHttpParser:
     @staticmethod
     def process_ch_pm25_array(response):
         """ch_pm25 (WH41/WH43): [{'channel': '1', 'PM25': '7.0',
-        'PM25_RealAQI': '29', 'PM25_24HAQI': '28', 'battery': '6'}, ...]."""
+        'PM25_RealAQI': '29', 'PM25_24HAQI': '28', 'PM25_24H': '6.1',
+        'battery': '6'}, ...]."""
         result = []
         for sensor in response:
             channel = EcowittHttpParser._channel(sensor)
             if channel is None:
                 continue
             _sensor = {'channel': channel}
-            for key, fn in (('PM25', float), ('PM25_RealAQI', int), ('PM25_24HAQI', int)):
+            for key, fn in (('PM25', float), ('PM25_RealAQI', int), ('PM25_24HAQI', int), ('PM25_24H', float)):
                 EcowittHttpParser._set(_sensor, key, sensor, key, fn, errors=(TypeError, ValueError))
             if len(_sensor) > 1:
                 result.append(_sensor)
@@ -10978,7 +11216,7 @@ class DirectEcowittDevice:
         # the field map the driver/service would use: the default map changed
         # by any [[field_map]] and [[field_map_extensions]]
         mapper = HttpMapper(driver_debug=None, **self.stn_dict)
-        active = active_field_map(mapper.field_map, current_data)
+        active = FieldMapper.to_station_columns(active_field_map(mapper.field_map, current_data))
         print()
         print('Active field map (the entries the device is filling now):')
         print('(format is WeeWX field name: Ecowitt HTTP driver field name)')
@@ -10991,6 +11229,11 @@ class DirectEcowittDevice:
         print('offline or still registering are not shown; the driver run directly with --driver-map')
         print('lists the whole map. The driver adds gateway_online, and WeeWX the fields it calculates')
         print('(rain, t_rain, p_rain, lightning_strike_count ...), to each loop packet.')
+        if FieldMapper.station_columns:
+            print()
+            print('These driver fields go to standard station database columns (battery levels as 0 OK, 1 low):')
+            for column, fields in FieldMapper.station_columns.items():
+                print(f"{column:>23}: {' or '.join(fields)}")
 
     def display_sensor_map(self):
         """Display multi-channel sensors, their device and reported channels."""
@@ -12035,6 +12278,7 @@ def main():
     weeutil.logger.setup('weewx-ecowittGateway', config_dict)
 
     define_units()
+    use_station_columns(config_dict)
 
     try:
         direct_device = DirectEcowittDevice(namespace, parser, stn_config_dict,

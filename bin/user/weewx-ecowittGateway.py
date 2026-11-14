@@ -26,9 +26,15 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 2.1.0
+Version: 2.1.1
 
 Revision History
+    2.1.1 (14 November 2026)
+        - weectl device --sensors shows rssi and the WH40 battery voltage;
+          wh40_volt, and wh68_volt/ws80_volt from the TCP API
+        - SD card catchup: columns matched whatever their case (Indoor
+          Temperature), Feels Like and AQIN Temperature backfilled;
+          --catchup-dry-run lists the columns not read
     2.1.0 (14 November 2026)
         - [[mqtt]]/[[loop_json]] append_units_label: field names with their
           unit (outTemp_C), as the weewx-mqtt extension does
@@ -172,7 +178,7 @@ log = logging.getLogger(__name__)
 
 
 DRIVER_NAME = 'EcowittGateway'
-DRIVER_VERSION = '2.1.0'
+DRIVER_VERSION = '2.1.1'
 # config section used by ecowitt_http.py; read if there is no [EcowittGateway]
 LEGACY_DRIVER_NAME = 'EcowittHttp'
 # this module, as WeeWX loads it
@@ -535,7 +541,9 @@ DEFAULT_GROUPS = {
     'wh55.ch4.battery': 'group_count',
     'wh57.battery': 'group_count',
     'wh68.battery': 'group_count',
+    'wh68.voltage': 'group_volt',
     'ws80.battery': 'group_count',
+    'ws80.voltage': 'group_volt',
     'ws85.battery': 'group_count',
     'ws90.battery': 'group_count',
     'wh51.ch1.voltage': 'group_volt',
@@ -1342,14 +1350,17 @@ class HttpMapper(FieldMapper):
         'ws90_sig': 'ws90.signal',
         'wh40_batt': 'wh40.battery',
         'wh40_sig': 'wh40.signal',
+        'wh40_volt': 'rain.0x13.voltage',
         'wh45_batt': 'wh45.battery',
         'wh45_sig': 'wh45.signal',
         'wh68_batt': 'wh68.battery',
         'wh68_sig': 'wh68.signal',
+        'wh68_volt': 'wh68.voltage',
         'wh69_batt': 'wh69.battery',
         'wh69_sig': 'wh69.signal',
         'ws80_batt': 'ws80.battery',
         'ws80_sig': 'ws80.signal',
+        'ws80_volt': 'ws80.voltage',
         'ws85_batt': 'ws85.battery',
         'ws85_sig': 'ws85.signal',
         'wn35_ch1_batt': 'wn35.ch1.battery',
@@ -1489,7 +1500,7 @@ class SdMapper(FieldMapper):
         'common_list.0x02.val': 'Outdoor Temperature',
         'common_list.0x07.val': 'Outdoor Humidity',
         'common_list.0x03.val': 'Dew Point',
-        'feelslike': 'Feels Like',
+        'common_list.3.val': 'Feels Like',
         'common_list.5.val': 'VPD',
         'common_list.0x0B.val': 'Wind',
         'common_list.0x0C.val': 'Gust',
@@ -1558,7 +1569,7 @@ class SdMapper(FieldMapper):
         'lightning.timestamp': 'Thunder time',
         'lightning.count': 'Thunder count',
         'lightning.distance': 'Thunder distance',
-        'co2.temperature': 'AQIN Temperature',
+        'co2.temp': 'AQIN Temperature',
         'co2.humidity': 'AQIN Humidity',
         'co2.CO2': 'AQIN CO2',
         'co2.PM25': 'AQIN Pm2.5',
@@ -1611,6 +1622,10 @@ class SdMapper(FieldMapper):
         'ch_lds.4.heat': 'LDS_Heat CH4'
     }
 
+    # the SD card columns met that the map has no entry for (see
+    # --catchup-dry-run), across all SdMapper objects
+    unmapped = set()
+
     def __init__(self, driver_debug=None, default_map=None, **mapper_config):
 
         # obtain the default map to be used
@@ -1618,6 +1633,9 @@ class SdMapper(FieldMapper):
         super().__init__(driver_debug=driver_debug,
                          default_map=def_map,
                          **mapper_config)
+        # SD card column names, matched whatever their case (firmware versions
+        # differ: 'Indoor Temperature', 'Indoor temperature')
+        self.by_column = {str(column).casefold(): field for column, field in self.field_map.inverse.items()}
 
     def map_data(self, rec, unit_system=None):
         """Map a packet of data according to the field map.
@@ -1650,10 +1668,12 @@ class SdMapper(FieldMapper):
             for field in rec.keys():
                 # strip the units information from the key
                 clean_key = re.sub(r"\(.*?\)","", field)
+                if clean_key.casefold() not in self.by_column and clean_key != 'Time':
+                    SdMapper.unmapped.add(clean_key)
                 # now try to map the source data using the sanitised key, but
                 # be prepared to catch any one of a number of exceptions
                 try:
-                    dest_field = self.field_map.inverse[clean_key]
+                    dest_field = self.by_column[clean_key.casefold()]
                     mapped_rec[dest_field] = float(rec[field])
                 except (KeyError, TypeError, ValueError) as e:
                     # KeyError indicates no mapping exists for this source
@@ -7764,7 +7784,7 @@ class EcowittHttpParser:
 
     def process_sensor_array(self, sensor, connected_only):
         """One get_sensors_info entry: (model, channel ('ch1' ...) or None,
-        {'address', 'id', 'battery', 'signal', 'enabled', 'version'}).
+        {'address', 'id', 'battery', 'signal', 'rssi', 'enabled', 'version'}).
         (None, None, None) for a sensor not registered, if connected_only.
         Battery is None for a sensor with no signal, unless show_battery."""
         if connected_only and sensor.get('id').lower() in self.not_registered:
@@ -7790,6 +7810,10 @@ class EcowittHttpParser:
             data['enabled'] = int(sensor.get('idst')) == 1
         except (TypeError, ValueError):
             data['enabled'] = None
+        try:
+            data['rssi'] = int(sensor.get('rssi'))
+        except (TypeError, ValueError):
+            data['rssi'] = None
         if 'version' in sensor.keys():
             data['version'] = sensor.get('version')
         channel = None
@@ -7951,6 +7975,7 @@ class EcowittSensors:
     batt_volt = ('wh68', 'wh51', 'wh54', 'wn34', 'wn35', 'ws80', 'ws85', 'ws90')
     # map of 'dotted' get_livedata_info sensor voltage fields to sensor address
     sensor_with_voltage = {
+        'rain.0x13.voltage': 3,
         'piezoRain.0x13.voltage': 48,
         'ch_soil.1.voltage': 14,
         'ch_soil.2.voltage': 15,
@@ -8466,7 +8491,8 @@ class EcowittDevice:
                  url_timeout=DEFAULT_URL_TIMEOUT,
                  show_battery=DEFAULT_FILTER_BATTERY,
                  log_unknown_fields=False,
-                 debug=DebugOptions()):
+                 debug=DebugOptions(),
+                 tcp_port=DEFAULT_TCP_PORT):
         """Initialise an EcowittDevice object."""
 
         # dow we have a non-None IP address, we cannot continue unless we have
@@ -8485,6 +8511,51 @@ class EcowittDevice:
         # sensor metadata
         self.sensors = EcowittSensors()
         self.log_failures = True
+        # the battery voltages only the TCP API gives (see tcp_battery_voltages())
+        self.tcp_api = EcowittTcpApi(ip_address, port=tcp_port, max_tries=1, retry_wait=0, timeout=url_timeout)
+        self._tcp_volts = {}
+        self._tcp_next = 0
+        self._tcp_failed = False
+
+    # sensors whose battery voltage only the TCP API gives (the HTTP API gives
+    # a level): {model: volts per unit of the TCP API's battery byte}
+    tcp_voltage_models = {'wh68': 0.02, 'ws80': 0.02}
+    # how often the voltages are read again, and tried again if the TCP API
+    # didn't answer (seconds)
+    TCP_VOLTAGE_REFRESH = 300
+    TCP_VOLTAGE_RETRY = 3600
+
+    def tcp_battery_voltages(self):
+        """{model: battery voltage} for the paired tcp_voltage_models sensors,
+        read from the TCP API's sensor list (port 45000; GW2000, GW3000 and
+        the like answer it), at most every TCP_VOLTAGE_REFRESH seconds. {} if
+        the TCP API doesn't answer (logged once; tried again every
+        TCP_VOLTAGE_RETRY seconds)."""
+
+        now = time.time()
+        if now < self._tcp_next:
+            return self._tcp_volts
+        try:
+            payload = self.tcp_api.call(0x3C)
+        except (DeviceIOError, OSError) as e:
+            if not self._tcp_failed:
+                log.info('The TCP API at %s:%d did not answer (%s): the WH68 and WS80 battery voltages are '
+                         'not available', self.tcp_api.host, self.tcp_api.port, e)
+            self._tcp_failed = True
+            self._tcp_volts, self._tcp_next = {}, now + self.TCP_VOLTAGE_RETRY
+            return {}
+        if self._tcp_failed:
+            log.info('The TCP API at %s:%d answers again', self.tcp_api.host, self.tcp_api.port)
+        self._tcp_failed = False
+        volts = {}
+        for n in range(0, len(payload) - 6, 7):
+            address, sid, batt = payload[n], int.from_bytes(payload[n + 1:n + 5], 'big'), payload[n + 5]
+            model = TCP_SENSOR_ADDRESSES.get(address, (None, None))[0]
+            if (model in self.tcp_voltage_models and sid not in (0xFFFFFFFE, 0xFFFFFFFF)
+                    and 0 < batt < 0xFF):
+                volts[model] = round(batt * self.tcp_voltage_models[model], 2)
+        self._tcp_volts, self._tcp_next = volts, now + self.TCP_VOLTAGE_REFRESH
+        return volts
 
     @property
     def log_failures(self):
@@ -8521,9 +8592,15 @@ class EcowittDevice:
         """
 
         sensors_data = self.api.get_sensors_info()
-        return self.parser.parse_get_sensors_info(sensors_data,
-                                                  connected_only=connected_only,
-                                                  flatten_data=flatten_data)
+        parsed = self.parser.parse_get_sensors_info(sensors_data,
+                                                    connected_only=connected_only,
+                                                    flatten_data=False)
+        # add the battery voltages only the TCP API gives (WH68, WS80)
+        for model, volts in self.tcp_battery_voltages().items():
+            sensor = parsed.get(model)
+            if isinstance(sensor, dict) and sensor.get('battery') is not None:
+                sensor['voltage'] = volts
+        return flatten(parsed) if flatten_data else parsed
 
     def get_rain_totals(self):
         """Return traditional rainfall aggregate and setting data.
@@ -8919,6 +8996,9 @@ def _tcp_sensor_addresses():
     return table
 
 
+TCP_SENSOR_ADDRESSES = _tcp_sensor_addresses()
+
+
 class EcowittTcpApi:
     """Client for the binary Ecowitt TCP API (port 45000), used by the GW1000 and WH2650."""
 
@@ -9166,7 +9246,7 @@ def make_device(ip_address, api=DEFAULT_API, tcp_port=DEFAULT_TCP_PORT, **kwargs
     if api == 'tcp':
         return EcowittTcpDevice(ip_address, tcp_port=tcp_port, **kwargs)
     if api == 'http':
-        return EcowittDevice(ip_address, **kwargs)
+        return EcowittDevice(ip_address, tcp_port=tcp_port, **kwargs)
     tcp = EcowittTcpDevice(ip_address, tcp_port=tcp_port, **{**kwargs, 'max_tries': 1})
     try:
         model = tcp.model
@@ -9176,7 +9256,7 @@ def make_device(ip_address, api=DEFAULT_API, tcp_port=DEFAULT_TCP_PORT, **kwargs
     if model and any(m in model.upper() for m in TCP_ONLY_DEVICES):
         log.info('     %s has no local HTTP API; using the TCP API on port %d', model, tcp.api.port)
         return tcp
-    device = EcowittDevice(ip_address, **kwargs)
+    device = EcowittDevice(ip_address, tcp_port=tcp_port, **kwargs)
     try:
         if device.model:
             return device
@@ -10915,6 +10995,8 @@ class DirectEcowittDevice:
                 # the sensor is registered
                 # create the signal strength text
                 signal_str = f"signal: {sensor_data.get('signal', '--')}"
+                if sensor_data.get('rssi') is not None:
+                    signal_str += f" rssi: {sensor_data['rssi']}"
                 # create suitable descriptive battery state text
                 desc_str = device.sensors.batt_state_desc(model=model,
                                                           sensor_data=sensor_data)
@@ -11139,6 +11221,7 @@ class DirectEcowittDevice:
         print()
         print(f"{'time':<16} {'min':>3} " + ' '.join(f'{f:>12}' for f in fields))
         count, first, last = 0, {}, {}
+        SdMapper.unmapped.clear()
         try:
             for rec in source.history(since, archive_interval=self.archive_interval):
                 count += 1
@@ -11162,6 +11245,17 @@ class DirectEcowittDevice:
             if f in first and last[f] >= first[f]:
                 print(f'The {gauge} gauge counted {round(last[f] - first[f], 2)} mm of rain over these '
                       f'records ({f}); WeeWX works out rain from it.')
+        self.print_unmapped_sd_columns()
+
+    @staticmethod
+    def print_unmapped_sd_columns():
+        """List the SD card columns the catchup met but doesn't read."""
+
+        if SdMapper.unmapped:
+            print()
+            print('SD card columns the catchup does not read (their readings are not backfilled):')
+            for column in sorted(SdMapper.unmapped):
+                print(f'    {column}')
 
     @property
     def use_all_sources(self):
@@ -11214,6 +11308,7 @@ class DirectEcowittDevice:
             print()
             print(f"{'time':<16} {'min':>3} " + ' '.join(f'{f:>12}' for f in fields))
             count, first, last = 0, {}, {}
+            SdMapper.unmapped.clear()
             for rec in driver.genArchiveRecords(since):
                 count += 1
                 for f in ('t_rainyear', 'p_rainyear'):
@@ -11240,6 +11335,7 @@ class DirectEcowittDevice:
             if f in first and last[f] >= first[f]:
                 print(f'{round(last[f] - first[f], 2)} mm of {gauge} rain counted once over these records '
                       f'(merged {f}); WeeWX works out rain from it.')
+        self.print_unmapped_sd_columns()
 
     def display_sources(self):
         """Display the gateways in [[sources]], in priority order, and whether each one answers."""

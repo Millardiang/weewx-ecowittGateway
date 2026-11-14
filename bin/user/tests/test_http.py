@@ -790,7 +790,8 @@ class ConfEditorTestCase(unittest.TestCase):
                       'wh51_ch9_volt', 'wh51_ch10_volt', 'wh51_ch11_volt', 'wh51_ch12_volt',
                       'wh51_ch13_volt', 'wh51_ch14_volt', 'wh51_ch15_volt', 'wh51_ch16_volt',
                       'wh54_ch1_volt', 'wh54_ch2_volt', 'wh54_ch3_volt', 'wh54_ch4_volt',
-                      'ws90_volt', 'ws90_sig', 'rainRate', 'p_rainrate')
+                      'ws90_volt', 'ws90_sig', 'rainRate', 'p_rainrate',
+                      'wh40_volt', 'wh68_volt', 'ws80_volt')
         # now get the field map from the mapper
         for weewx_field in test_fields:
             if weewx_field not in exclusions:
@@ -2162,6 +2163,7 @@ class EcowittSensorsTestCase(unittest.TestCase):
     # sensors whose battery state is determined from a battery voltage value
     batt_volt = ('wh68', 'wh51', 'wh54', 'wn34', 'wn35', 'ws80', 'ws85', 'ws90')
     sensor_with_voltage = {
+        'rain.0x13.voltage': 3,
         'piezoRain.0x13.voltage': 48,
         'ch_soil.1.voltage': 14,
         'ch_soil.2.voltage': 15,

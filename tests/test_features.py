@@ -290,6 +290,20 @@ def test_catchup_dry_run_command(egw, sd_station, capsys, info_log):
     assert '2026-11-06 10:05' in out and '2026-11-06 10:00' not in out
     assert '2 record(s).' in out and 'The tipping gauge counted 0.2 mm' in out
     assert 'but archive_interval is 10.0 minutes' in info_log.text
+    assert 'SD card columns the catchup does not read' not in out      # the fixture's are all read
+
+
+def test_catchup_dry_run_lists_sd_columns_it_does_not_read(egw, sd_station, sd_card, capsys):
+    """So a column a gateway names in a way the driver doesn't know (eg a sensor's own UV or PM
+    column) can be reported and added to the SD card map."""
+    lines = sd_card.files['202611A.csv'].splitlines()
+    lines[0] += ',Unknown Sensor UV(),AQIN PM9.9(ug/m3)'
+    lines[1:] = [line + ',3,4.5' for line in lines[1:]]
+    sd_card.files['202611A.csv'] = '\n'.join(lines) + '\n'
+    direct(egw, sd_station, since='2026-11-06 09:00', catchup_dry_run=True).process_options()
+    out = capsys.readouterr().out
+    assert 'SD card columns the catchup does not read' in out
+    assert '    AQIN PM9.9\n' in out and '    Unknown Sensor UV\n' in out
 
 
 def test_catchup_dry_run_with_no_records(egw, station, capsys):
@@ -389,3 +403,17 @@ def test_rain_fields_weewx_calculates_have_unit_groups(egw):
     packet = {'dateTime': 1700000000, 'usUnits': weewx.US, 't_rain': 0.1, 'p_rain': 0.2}
     exported = egw.export_packet(packet, 'metricwx')
     assert exported['t_rain'] == pytest.approx(2.54) and exported['p_rain'] == pytest.approx(5.08)
+
+
+def test_sd_columns_are_matched_whatever_their_case(egw):
+    """The SD card has 'Indoor Temperature'; the map ecowitt_http.py 0.1.0a28 had 'Indoor temperature',
+    so indoor temperature was never backfilled. 'Feels Like' and 'AQIN Temperature' were read into
+    names the field map doesn't use."""
+    sd = egw.SdMapper(driver_debug=egw.DebugOptions())
+    row = {'Indoor Temperature(℃)': '21.0', 'Feels Like(℃)': '10.5', 'AQIN Temperature(℃)': '20.7',
+           'uv-index': '1'}
+    dotted = sd.map_data(row)
+    assert dotted == {'wh25.intemp': 21.0, 'common_list.3.val': 10.5, 'co2.temp': 20.7, 'common_list.0x17.val': 1.0}
+    mapped = egw.HttpMapper(driver_debug=egw.DebugOptions(), quiet=True).map_data(dotted)
+    assert mapped['inTemp'] == 21.0 and mapped['feelslike'] == 10.5 and mapped['co2_temp'] == 20.7
+    assert mapped['UV'] == 1.0

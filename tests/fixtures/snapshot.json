@@ -1,11 +1,11 @@
 {
 "cli": {
 "--active-map": {
-"digest": "b844fa6be573da62",
+"digest": "8513cef21f6c9749",
 "lines": 82
 },
 "--active-map --no-sensor-map": {
-"digest": "b844fa6be573da62",
+"digest": "8513cef21f6c9749",
 "lines": 82
 },
 "--active-map [down]": {
@@ -21,20 +21,20 @@
 "lines": 9
 },
 "--default-map": {
-"digest": "1225e071c819a9af",
-"lines": 299
+"digest": "bc81be19138a6ba2",
+"lines": 302
 },
 "--default-map [down]": {
-"digest": "1225e071c819a9af",
-"lines": 299
+"digest": "bc81be19138a6ba2",
+"lines": 302
 },
 "--default-map [null]": {
-"digest": "1225e071c819a9af",
-"lines": 299
+"digest": "bc81be19138a6ba2",
+"lines": 302
 },
 "--default-map [sparse]": {
-"digest": "1225e071c819a9af",
-"lines": 299
+"digest": "bc81be19138a6ba2",
+"lines": 302
 },
 "--driver-map": {
 "digest": "2f8aa7319e4ac001",
@@ -289,15 +289,15 @@
 "lines": 7
 },
 "--sensors": {
-"digest": "4ae65a3e4f469d23",
+"digest": "b14c1a25cd5de3fd",
 "lines": 16
 },
 "--sensors --show-all-batt": {
-"digest": "4ae65a3e4f469d23",
+"digest": "b14c1a25cd5de3fd",
 "lines": 16
 },
 "--sensors --unmask": {
-"digest": "4ae65a3e4f469d23",
+"digest": "b14c1a25cd5de3fd",
 "lines": 16
 },
 "--sensors [down]": {
@@ -313,20 +313,20 @@
 "lines": 4
 },
 "--service-map": {
-"digest": "ed9974f62ca3acdd",
-"lines": 301
+"digest": "0a4b2347c9c0f15b",
+"lines": 304
 },
 "--service-map [down]": {
-"digest": "ed9974f62ca3acdd",
-"lines": 301
+"digest": "0a4b2347c9c0f15b",
+"lines": 304
 },
 "--service-map [null]": {
-"digest": "ed9974f62ca3acdd",
-"lines": 301
+"digest": "0a4b2347c9c0f15b",
+"lines": 304
 },
 "--service-map [sparse]": {
-"digest": "ed9974f62ca3acdd",
-"lines": 301
+"digest": "0a4b2347c9c0f15b",
+"lines": 304
 },
 "--sources": {
 "digest": "c48af96505dae87d",
@@ -365,19 +365,19 @@
 "lines": 5
 },
 "--version": {
-"digest": "7f2fce97594a6e52",
+"digest": "cfe8996456f94538",
 "lines": 1
 },
 "--version [down]": {
-"digest": "7f2fce97594a6e52",
+"digest": "cfe8996456f94538",
 "lines": 1
 },
 "--version [null]": {
-"digest": "7f2fce97594a6e52",
+"digest": "cfe8996456f94538",
 "lines": 1
 },
 "--version [sparse]": {
-"digest": "7f2fce97594a6e52",
+"digest": "cfe8996456f94538",
 "lines": 1
 },
 "--weewx-fields": {
@@ -914,13 +914,13 @@
 "METRIC get_sdmmc_info_data junk": "a7eec1264fe1d1bf",
 "METRIC get_sdmmc_info_data none": "1c1431c4c816f495",
 "METRIC get_sdmmc_info_data units": "71202d7d96ab9cc7",
-"METRIC get_sensors_data base": "117f1d25ff6cab70",
-"METRIC get_sensors_data dash": "1478d642d5b801ef",
+"METRIC get_sensors_data base": "44e7490f3a4010d1",
+"METRIC get_sensors_data dash": "a2cf8ff4398e8439",
 "METRIC get_sensors_data drop": "3063c1f05f7aaa1c",
-"METRIC get_sensors_data empty": "edee6b1f7834c6ce",
-"METRIC get_sensors_data junk": "3f57916ea2a638c1",
-"METRIC get_sensors_data none": "8d19e3c824e07d69",
-"METRIC get_sensors_data units": "117f1d25ff6cab70",
+"METRIC get_sensors_data empty": "4bdefc9591f62a1b",
+"METRIC get_sensors_data junk": "831e542b1ca1bc8e",
+"METRIC get_sensors_data none": "f3c0bc3e637246f1",
+"METRIC get_sensors_data units": "44e7490f3a4010d1",
 "METRIC get_soil_calibration_data base": "fb63988b80cdb08c",
 "METRIC get_soil_calibration_data dash": "a683096011db3975",
 "METRIC get_soil_calibration_data drop": "38c4caacae956dd0",
@@ -1458,13 +1458,13 @@
 "METRICWX get_sdmmc_info_data junk": "a7eec1264fe1d1bf",
 "METRICWX get_sdmmc_info_data none": "1c1431c4c816f495",
 "METRICWX get_sdmmc_info_data units": "71202d7d96ab9cc7",
-"METRICWX get_sensors_data base": "117f1d25ff6cab70",
-"METRICWX get_sensors_data dash": "1478d642d5b801ef",
+"METRICWX get_sensors_data base": "44e7490f3a4010d1",
+"METRICWX get_sensors_data dash": "a2cf8ff4398e8439",
 "METRICWX get_sensors_data drop": "3063c1f05f7aaa1c",
-"METRICWX get_sensors_data empty": "edee6b1f7834c6ce",
-"METRICWX get_sensors_data junk": "3f57916ea2a638c1",
-"METRICWX get_sensors_data none": "8d19e3c824e07d69",
-"METRICWX get_sensors_data units": "117f1d25ff6cab70",
+"METRICWX get_sensors_data empty": "4bdefc9591f62a1b",
+"METRICWX get_sensors_data junk": "831e542b1ca1bc8e",
+"METRICWX get_sensors_data none": "f3c0bc3e637246f1",
+"METRICWX get_sensors_data units": "44e7490f3a4010d1",
 "METRICWX get_soil_calibration_data base": "fb63988b80cdb08c",
 "METRICWX get_soil_calibration_data dash": "a683096011db3975",
 "METRICWX get_soil_calibration_data drop": "38c4caacae956dd0",
@@ -2002,13 +2002,13 @@
 "US get_sdmmc_info_data junk": "a7eec1264fe1d1bf",
 "US get_sdmmc_info_data none": "1c1431c4c816f495",
 "US get_sdmmc_info_data units": "71202d7d96ab9cc7",
-"US get_sensors_data base": "117f1d25ff6cab70",
-"US get_sensors_data dash": "1478d642d5b801ef",
+"US get_sensors_data base": "44e7490f3a4010d1",
+"US get_sensors_data dash": "a2cf8ff4398e8439",
 "US get_sensors_data drop": "3063c1f05f7aaa1c",
-"US get_sensors_data empty": "edee6b1f7834c6ce",
-"US get_sensors_data junk": "3f57916ea2a638c1",
-"US get_sensors_data none": "8d19e3c824e07d69",
-"US get_sensors_data units": "117f1d25ff6cab70",
+"US get_sensors_data empty": "4bdefc9591f62a1b",
+"US get_sensors_data junk": "831e542b1ca1bc8e",
+"US get_sensors_data none": "f3c0bc3e637246f1",
+"US get_sensors_data units": "44e7490f3a4010d1",
 "US get_soil_calibration_data base": "fb63988b80cdb08c",
 "US get_soil_calibration_data dash": "a683096011db3975",
 "US get_soil_calibration_data drop": "38c4caacae956dd0",

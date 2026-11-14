@@ -214,3 +214,16 @@ def test_field_map_commands_stop_polling(egw, http_config, command, capsys, monk
     egw.main()
     assert 'Traceback' not in capsys.readouterr().out
     assert not any(t.name == 'EcowittHttpCollectorThread' and t.is_alive() for t in threading.enumerate())
+
+
+def test_sensors_show_rssi_and_the_wh40_voltage(egw, http_config, gateway, capsys):
+    """As earlier versions did: 'signal: 4 rssi: -71 battery: 4 (1.6V) (OK)' for the WH40, whose
+    voltage the gateway gives in its live rain data."""
+    for item in gateway.responses['get_livedata_info']['rain']:
+        if item['id'] == '0x13':
+            item['voltage'] = '1.6'
+    lines = run(egw, http_config, capsys, '--sensors').splitlines()
+    wh40 = next(line for line in lines if line.startswith('WH40 '))
+    assert 'signal: 4 rssi: -71 battery: 4 (1.6V) (OK)' in wh40
+    ws90 = next(line for line in lines if line.startswith('WS90 '))
+    assert 'rssi: -62' in ws90

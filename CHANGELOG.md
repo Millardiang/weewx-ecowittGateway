@@ -3,6 +3,25 @@
 All notable changes to weewx-ecowittGateway are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.1] – 14 November 2026
+
+### Fixed
+
+- `weectl device --sensors` shows each sensor's rssi again, and the WH40's battery voltage
+  (`battery: 5 (1.6V) (OK)`).
+- The WH40's battery voltage is recorded again, in `wh40_volt`.
+- The WH68's battery voltage is recorded again, in `wh68_volt` (and the WS80's in `ws80_volt`). The
+  HTTP API gives only a level for these, so they are read from the gateway's TCP API (port 45000)
+  every 5 minutes; if it doesn't answer, the log says so once.
+- Catchup from the SD card: column names are matched whatever their case, so `Indoor Temperature`
+  (`inTemp`) is backfilled; `Feels Like` (`feelslike`) and `AQIN Temperature` (`co2_temp`) were
+  read into names the field map doesn't use and were never backfilled.
+
+### Added
+
+- `weectl device --catchup-dry-run` lists the SD card columns the catchup doesn't read, so a
+  sensor whose column a gateway names in a way the driver doesn't know can be reported.
+
 ## [2.1.0] – 14 November 2026
 
 ### Added

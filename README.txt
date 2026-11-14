@@ -1,7 +1,7 @@
 WEEWX-ECOWITTGATEWAY
 ====================
 
-Version: 2.1.0 · WeeWX driver and service for Ecowitt gateways and consoles (local HTTP API, or the
+Version: 2.1.1 · WeeWX driver and service for Ecowitt gateways and consoles (local HTTP API, or the
 TCP API for the GW1000)
 
 weewx-ecowittGateway is built on Gary Roderick's Ecowitt local HTTP API driver (ecowitt_http.py
@@ -77,18 +77,18 @@ Installation as a WeeWX driver
 
     For WeeWX package installs:
 
-        weectl extension install weewx-ecowittGateway-2.1.0.zip
+        weectl extension install weewx-ecowittGateway-2.1.1.zip
 
     For WeeWX pip installs the Python virtual environment must be activated before the extension is
     installed:
 
-        source ~/weewx-venv/bin/activate weectl extension install weewx-ecowittGateway-2.1.0.zip
+        source ~/weewx-venv/bin/activate weectl extension install weewx-ecowittGateway-2.1.1.zip
 
     For WeeWX installs from git the Python virtual environment must be activated before the
     extension is installed:
 
         source ~/weewx-venv/bin/activate python3 ~/weewx/src/weectl.py extension install
-        weewx-ecowittGateway-2.1.0.zip
+        weewx-ecowittGateway-2.1.1.zip
 
     The installer asks for the device IP address (and checks it), whether to use the device as the
     station driver or as a service, which rain gauge WeeWX rain comes from, and the optional
@@ -352,7 +352,10 @@ To see what a catchup would fetch, without saving anything:
     weectl device --sd-files                       # the SD card, its interval and its files weectl
     device --catchup-dry-run --since="2026-11-05 14:00" [--catchup-source=device|net|either]
 
---since defaults to 24 hours ago.
+--since defaults to 24 hours ago. The dry run ends with the SD card columns the catchup doesn't
+read, if there are any: their readings aren't backfilled. A sensor whose column a gateway names in a
+way the driver doesn't know shows up there; please report it. SD card column names are matched
+whatever their case.
 
 Limits
 ------
@@ -487,7 +490,14 @@ weectl device --active-map lists the fields your sensors fill.
 
 Battery and signal fields are named after the sensor, with the channel for multi-channel sensors:
 wh40_batt, ws90_sig, wn31_ch2_batt, wh51_ch3_sig, and _volt for a battery voltage (wh51_ch3_volt,
-ws90_volt). The WS69 sensor array is wh69 (the name the gateway uses).
+ws90_volt, wh40_volt). The WS69 sensor array is wh69 (the name the gateway uses). The WH68's and
+WS80's battery voltages (wh68_volt, ws80_volt) come from the gateway's TCP API (port 45000), which
+GW2000 and GW3000 gateways answer as well as the HTTP API; the HTTP API gives only a level (0–5) for
+them. They are read every 5 minutes; if the TCP API doesn't answer, the log says so once and those
+two fields are left out. weectl device --sensors shows each sensor's signal, rssi (dBm), battery
+and, where there is one, voltage:
+
+    WH40       sensor ID: C79F           signal: 4 rssi: -56 battery: 5 (1.6V) (OK)
 
 PM2.5 and air-quality sensors:
 
@@ -667,7 +677,7 @@ Every installer question can be answered with an ECOWITT_* environment variable,
 be scripted (for example in a Vagrant or Ansible provisioner):
 
     sudo ECOWITT_NO_PROMPT=yes ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \ weectl
-    extension install --yes weewx-ecowittGateway-2.1.0.zip
+    extension install --yes weewx-ecowittGateway-2.1.1.zip
 
 Questions without a variable take their default (the existing setting where there is one), and the
 installer prints each answer and where it came from. A variable with a value the installer cannot

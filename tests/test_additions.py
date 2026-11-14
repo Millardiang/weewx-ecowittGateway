@@ -273,3 +273,92 @@ def test_skins_read_additions_fields_by_name(egw, tmp_path):
         service.xtype.shut_down()
         engine.db_binder.close()
     assert service.xtype not in weewx.xtypes.xtypes
+
+
+# ---- conventional names another extension's database has columns for ----
+
+def with_extras(conf, tmp_path, columns=('isRaining', 'dayRain', 'p_dayRain', 'yearRain', 'p_yearRain',
+                                         'lightning_last_det_time', 'pm4_0')):
+    """Add a DivumWX-like extras database with these columns."""
+    import sqlite3
+    conf['DataBindings']['divumwx_extras_binding'] = {
+        'database': 'divumwx_extras_db', 'table_name': 'archive',
+        'manager': 'weewx.manager.DaySummaryManager', 'schema': 'user.nosuchmodule.schema'}
+    conf['Databases']['divumwx_extras_db'] = {'database_name': 'divumwx_extras.sdb', 'database_type': 'SQLite'}
+    db = sqlite3.connect(tmp_path / 'divumwx_extras.sdb')
+    db.execute('CREATE TABLE archive (dateTime INTEGER NOT NULL UNIQUE PRIMARY KEY, usUnits INTEGER NOT NULL, '
+               '`interval` INTEGER NOT NULL, ' + ', '.join(f'{c} REAL' for c in columns) + ')')
+    db.commit()
+    db.close()
+    return conf
+
+
+def test_binding_columns_reads_another_extensions_database_without_its_schema(egw, tmp_path):
+    conf = with_extras(config(tmp_path), tmp_path)
+    assert 'p_dayRain' in egw.binding_columns(conf, 'divumwx_extras_binding')
+    assert egw.binding_columns(conf, 'nosuchbinding') is None
+    conf['Databases']['divumwx_extras_db']['database_name'] = 'missing.sdb'
+    assert egw.binding_columns(conf, 'divumwx_extras_binding') is None
+    assert not (tmp_path / 'missing.sdb').exists()
+
+
+def test_other_bindings(egw, tmp_path):
+    conf = with_extras(config(tmp_path), tmp_path)
+    assert egw.other_bindings(conf) == ['divumwx_extras_binding']
+    conf['EcowittGateway']['additions']['other_bindings'] = 'none'
+    assert egw.other_bindings(conf) == []
+
+
+def test_conventional_name_map(egw, tmp_path):
+    conf = with_extras(config(tmp_path), tmp_path)
+    found = egw.conventional_name_map(conf)
+    # dayRain and yearRain are left to the extension that has them
+    assert found == {'isRaining': 'is_raining', 'p_dayRain': 'p_rainday', 'p_yearRain': 'p_rainyear',
+                     'lightning_last_det_time': 'lightningdettime'}
+    # none without such a database, or when turned off
+    assert egw.conventional_name_map(config(tmp_path)) == {}
+    conf['EcowittGateway']['additions']['use_station_columns'] = 'False'
+    assert egw.conventional_name_map(conf) == {}
+
+
+def test_column_map_adds_and_changes_names(egw, tmp_path):
+    conf = with_extras(config(tmp_path), tmp_path, columns=('dayRain', 'pm2_5_SDS'))
+    conf['EcowittGateway']['additions']['column_map'] = {'pm2_5_SDS': 'pm2_52', 'dayRain': 'p_rainday'}
+    assert egw.conventional_name_map(conf) == {'pm2_5_SDS': 'pm2_52', 'dayRain': 'p_rainday'}
+
+
+def test_conventional_names_are_copies_with_units(columns_map, tmp_path):
+    import weewx.units
+    egw = columns_map
+    saved = egw.FieldMapper.conventional_names
+    try:
+        egw.use_station_columns(with_extras(config(tmp_path), tmp_path))
+        mapper = egw.HttpMapper(driver_debug=egw.DebugOptions(), quiet=True)
+        data = mapper.map_data({'rain.0x10.val': 1.2, 'piezoRain.0x10.val': 1.4, 'piezoRain.0x13.val': 480.0})
+        # the driver's own names stay ([[Delta]] uses t_rainyear and p_rainyear)
+        assert data['t_rainday'] == 1.2 and 'dayRain' not in data
+        assert data['p_rainday'] == data['p_dayRain'] == 1.4
+        assert data['p_rainyear'] == data['p_yearRain'] == 480.0
+        assert weewx.units.obs_group_dict['p_dayRain'] == 'group_rain'
+        assert egw.accumulator_extractors()['p_dayRain'] == 'last'
+    finally:
+        egw.FieldMapper.conventional_names = saved
+
+
+def test_conventional_names_stay_out_of_the_additions_database(columns_map, tmp_path):
+    egw = columns_map
+    saved = egw.FieldMapper.conventional_names
+    conf = with_extras(config(tmp_path), tmp_path)
+    try:
+        egw.use_station_columns(conf)
+        engine = Engine(conf)
+        egw.EcowittAdditions(engine, conf)
+        # pm4_0 has a column of that name in the extras database
+        engine.archive(record(1_700_000_100, t_rainday=1.2, dayRain=1.2, p_rainday=1.4, p_dayRain=1.4,
+                              t_rainweek=3.0, pm4_0=2.0))
+        engine.db_binder.close()
+        columns = [c[1] for c in rows(tmp_path / 'ecowitt_additions.sdb', 'PRAGMA table_info(archive)')]
+        # t_rainday isn't copied to dayRain (left to the extension), so it is kept here
+        assert columns == ['dateTime', 'usUnits', 'interval', 't_rainday', 't_rainweek']
+    finally:
+        egw.FieldMapper.conventional_names = saved

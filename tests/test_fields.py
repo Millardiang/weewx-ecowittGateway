@@ -39,9 +39,10 @@ def test_accumulator_entries_follow_the_field_map(egw):
         assert field not in accum, field       # averaged
     renamed = {'wn32_batt', 'wn32_sig', 'wn32p_batt', 'wn32p_sig'}     # wn32_indoor/wn32_outdoor
     # and the station database columns some fields go to with the additions database on
-    assert set(accum) - set(fmap) == set(egw.ACCUMULATOR_SUM) | renamed | set(egw.STATION_COLUMNS)
+    assert set(accum) - set(fmap) == (set(egw.ACCUMULATOR_SUM) | renamed | set(egw.STATION_COLUMNS)
+                                   | {n for n, f in egw.CONVENTIONAL_NAMES.items() if f in fmap and n in accum})
     for name in egw.ECOWITT_HTTP_ACCUMULATOR_LAST:
-        assert name not in accum or name in fmap or name in egw.STATION_COLUMNS
+        assert name not in accum or name in fmap or name in egw.STATION_COLUMNS or name in egw.CONVENTIONAL_NAMES
     for name in ('co2_24h_avg', 'pm2_51_24h_avg', 'pm2_55_24h_avg', 'pm10_24h_avg', 'pm25_co2_24h'):
         assert accum[name]['extractor'] == 'last', name
     for name in ('pm1_0', 'pm25_co2_real', 'co2_temp', 'co2_in'):
@@ -132,7 +133,7 @@ def test_reconfigure_tidies_the_accumulator(egw, capsys):
     accum = conf['Accumulator']
     assert 'pm2_51_24hav' not in accum and accum['lightningcount']['extractor'] == 'last'
     assert accum['wh40_batt']['extractor'] == 'last'           # the driver's own entries added
-    assert 'Removed 6 unused [Accumulator] entries' in capsys.readouterr().out
+    assert 'Removed 5 unused [Accumulator] entries' in capsys.readouterr().out
 
 
 def test_install_over_an_earlier_extension_tidies_the_accumulator(monkeypatch, gateway):

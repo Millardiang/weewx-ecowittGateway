@@ -26,9 +26,14 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 2.0.0
+Version: 2.1.0
 
 Revision History
+    2.1.0 (14 November 2026)
+        - [[mqtt]]/[[loop_json]] append_units_label: field names with their
+          unit (outTemp_C), as the weewx-mqtt extension does
+        - conventional names (p_dayRain, isRaining ...) for columns in other
+          extensions' databases ([[additions]] [[[column_map]]], other_bindings)
     2.0.0 (12 November 2026)
         - built on Gary Roderick's ecowitt_http.py 0.1.0a28 as weewx-ecowittGateway:
           driver EcowittGateway, config section [EcowittGateway] ([EcowittHttp]
@@ -153,6 +158,7 @@ import configobj
 import weecfg
 import weeutil.weeutil
 import weeutil.logger
+import weedb
 import weewx.defaults
 import weewx.drivers
 import weewx.engine
@@ -166,7 +172,7 @@ log = logging.getLogger(__name__)
 
 
 DRIVER_NAME = 'EcowittGateway'
-DRIVER_VERSION = '2.0.0'
+DRIVER_VERSION = '2.1.0'
 # config section used by ecowitt_http.py; read if there is no [EcowittGateway]
 LEGACY_DRIVER_NAME = 'EcowittHttp'
 # this module, as WeeWX loads it
@@ -889,10 +895,12 @@ class FieldMapper:
 
     station_columns ({station database column: (driver fields)}, set by
     use_station_columns()) renames, in mapped data, the first of the driver
-    fields present to the station database column.
+    fields present to the station database column; conventional_names
+    ({name: driver field}) copies a driver field to its conventional name.
     """
 
     station_columns = {}
+    conventional_names = {}
 
     def __init__(self, driver_debug=None, default_map=None, **mapper_config):
         """Initialise a FieldMapper object."""
@@ -1032,6 +1040,9 @@ class FieldMapper:
                     else:
                         data[column] = data.pop(field)
                     break
+        for name, field in cls.conventional_names.items():
+            if field in data and name not in data:
+                data[name] = data[field]
         return data
 
 
@@ -1965,14 +1976,40 @@ def check_units(units, label):
     return units
 
 
-def export_packet(packet, units):
-    """Copy of a loop packet in the requested unit system, non-finite floats as None."""
+# The unit labels append_units_label adds to field names, as the weewx-mqtt
+# extension does (outTemp_C, windSpeed_mps): WeeWX's unit name, shortened for
+# the common ones, and none for a field without a unit (outHumidity, windDir).
+SHORT_UNIT_LABELS = {
+    'degree_F': 'F', 'degree_C': 'C', 'inch': 'in',
+    'mile_per_hour': 'mph', 'mile_per_hour2': 'mph', 'km_per_hour': 'kph', 'km_per_hour2': 'kph',
+    'knot': 'knot', 'knot2': 'knot2', 'meter_per_second': 'mps', 'meter_per_second2': 'mps',
+    'watt_per_meter_squared': 'Wpm2',
+    'degree_compass': None, 'uv_index': None, 'percent': None, 'unix_epoch': None,
+}
+
+
+def unit_label_name(field, unit_system):
+    """field with its unit appended (outTemp_C), or as it is if it has no unit."""
+
+    if field in ('dateTime', 'usUnits'):
+        return field
+    unit = weewx.units.getStandardUnitType(unit_system, field)[0]
+    label = SHORT_UNIT_LABELS.get(unit, unit)
+    return f'{field}_{label}' if label else field
+
+
+def export_packet(packet, units, append_units_label=False):
+    """Copy of a loop packet in the requested unit system, non-finite floats as
+    None, with the field names' units appended if append_units_label."""
 
     data = packet
     if units != 'native':
         data = weewx.units.StdUnitConverters[UNIT_SYSTEMS[units]].convertDict(packet)
         data['usUnits'] = UNIT_SYSTEMS[units]
-    return {k: (None if isinstance(v, float) and not math.isfinite(v) else v)
+    unit_system = data.get('usUnits')
+    name = ((lambda k: unit_label_name(k, unit_system)) if append_units_label and unit_system is not None
+            else (lambda k: k))
+    return {name(k): (None if isinstance(v, float) and not math.isfinite(v) else v)
             for k, v in data.items()}
 
 
@@ -2001,6 +2038,8 @@ class LoopJsonWriter:
         path:   file or folder, relative paths are relative to HTML_ROOT
                 (default ecwLoop.json)
         units:  native, us, metric or metricwx (default native)
+        append_units_label: add each field's unit to its name, eg outTemp_C
+                (default False)
     """
 
     default_name = 'ecwLoop.json'
@@ -2009,6 +2048,7 @@ class LoopJsonWriter:
         config = config or {}
         self.enabled = weeutil.weeutil.tobool(config.get('enable', False))
         self.units = check_units(config.get('units', 'native'), 'loop_json')
+        self.append_units_label = weeutil.weeutil.tobool(config.get('append_units_label', False))
         path = os.path.expanduser(str(config.get('path', self.default_name)))
         if not os.path.isabs(path):
             path = os.path.join(html_dir or os.getcwd(), path)
@@ -2025,7 +2065,8 @@ class LoopJsonWriter:
         try:
             tmp_path = f'{self.path}.tmp'
             with open(tmp_path, 'w') as f:
-                json.dump(export_packet(packet, self.units), f, default=str, sort_keys=True)
+                json.dump(export_packet(packet, self.units, self.append_units_label), f,
+                          default=str, sort_keys=True)
             os.replace(tmp_path, self.path)
         except (OSError, TypeError, ValueError, KeyError) as e:
             self.errors.error(f'unable to write {self.path}: {e}')
@@ -2037,8 +2078,9 @@ class MqttPublisher:
     """Publish each loop packet to an MQTT broker (needs the paho-mqtt package).
 
     Config ([EcowittGateway] [[mqtt]]): enable, host, port, username,
-    password, topic, format (json, individual or both), units, qos, retain,
-    tls, ca_certs, certfile, keyfile, tls_insecure, client_id, keepalive.
+    password, topic, format (json, individual or both), units,
+    append_units_label, qos, retain, tls, ca_certs, certfile, keyfile,
+    tls_insecure, client_id, keepalive.
     """
 
     formats = ('json', 'individual', 'both')
@@ -2068,6 +2110,7 @@ class MqttPublisher:
             log.error("mqtt: unknown format '%s', using 'json'", self.format)
             self.format = 'json'
         self.units = check_units(config.get('units', 'native'), 'mqtt')
+        self.append_units_label = to_bool(config.get('append_units_label', False))
         self.qos = min(max(to_int(config.get('qos', 0)), 0), 2)
         self.retain = to_bool(config.get('retain', False))
         self.errors = OnceLogger('mqtt')
@@ -2091,8 +2134,9 @@ class MqttPublisher:
         self.client.reconnect_delay_set(1, 60)
         self.client.connect_async(self.host, self.port, to_int(config.get('keepalive', 60)))
         self.client.loop_start()
-        log.info("loop data will be published to MQTT broker %s:%s, topic '%s' (%s, %s units)",
-                 self.host, self.port, self.topic, self.format, self.units)
+        log.info("loop data will be published to MQTT broker %s:%s, topic '%s' (%s, %s units%s)",
+                 self.host, self.port, self.topic, self.format, self.units,
+                 ', labelled' if self.append_units_label else '')
 
     @staticmethod
     def _failed(rc):
@@ -2118,7 +2162,7 @@ class MqttPublisher:
         if not self.enabled:
             return
         try:
-            data = export_packet(packet, self.units)
+            data = export_packet(packet, self.units, self.append_units_label)
             messages = []
             if self.format in ('json', 'both'):
                 messages.append((f'{self.topic}/loop',
@@ -2274,14 +2318,102 @@ def station_column_map(config_dict, columns=None):
     return result
 
 
+# The conventional names other drivers (the Davis Vantage among them) and
+# extensions use for readings this driver has under its own name:
+# {name: driver field}. A database with a column of that name (the station's,
+# or another extension's, such as DivumWX's divumwx_extras.sdb) gets the
+# reading under that name: the driver field is copied to it, and kept, as the
+# driver's own calculations ([StdWXCalculate] [[Delta]]) use it. Not dayRain,
+# weekRain, monthRain, yearRain, stormRain or p_stormRain: extensions with
+# those columns (DivumWX) work them out themselves.
+# [[additions]] [[[column_map]]] adds to or changes these.
+CONVENTIONAL_NAMES = {
+    'isRaining': 'is_raining',
+    'lightning_last_det_time': 'lightningdettime',
+    'hourRain': 't_rainhour',
+    'p_rainRate': 'p_rainrate', 'p_hourRain': 'p_rainhour', 'p_dayRain': 'p_rainday',
+    'p_weekRain': 'p_rainweek', 'p_monthRain': 'p_rainmonth', 'p_yearRain': 'p_rainyear',
+}
+
+
+def binding_columns(config_dict, binding):
+    """The columns of a data binding's table, read from the database without
+    loading the binding's schema (another extension's module); None if the
+    database can't be opened (not made yet)."""
+
+    try:
+        binding_dict = config_dict['DataBindings'][binding]
+        database_dict = weewx.manager.get_database_dict_from_config(config_dict, binding_dict['database'])
+        connection = weedb.connect(database_dict)
+    except Exception:
+        return None
+    try:
+        return set(connection.columnsOf(binding_dict.get('table_name', 'archive')))
+    except Exception:
+        return None
+    finally:
+        connection.close()
+
+
+def other_bindings(config_dict):
+    """The data bindings, other than the station's and the additions
+    database's, whose columns conventional names are looked for in:
+    [[additions]] other_bindings, default all of [DataBindings]."""
+
+    conf = driver_config(config_dict).get('additions') or {}
+    skip = {(config_dict.get('StdArchive') or {}).get('data_binding', 'wx_binding'),
+            conf.get('data_binding', ADDITIONS_BINDING)}
+    names = conf.get('other_bindings')
+    if names is None:
+        names = list(config_dict.get('DataBindings') or {})
+    names = weeutil.weeutil.option_as_list(names) or []
+    return [b for b in names if b and b.lower() != 'none' and b not in skip]
+
+
+def conventional_name_map(config_dict, columns=None, other_columns=None):
+    """{conventional name: driver field} for the CONVENTIONAL_NAMES (and
+    [[additions]] [[[column_map]]]) entries this station can use, unless
+    [[additions]] use_station_columns is False: a database has a column of
+    that name (the station's, columns, default station_columns(), or another
+    binding's, other_columns, default those of other_bindings()) and the field
+    map doesn't fill it already."""
+
+    conf = driver_config(config_dict).get('additions') or {}
+    if not weeutil.weeutil.tobool(conf.get('use_station_columns', True)):
+        return {}
+    names = dict(CONVENTIONAL_NAMES)
+    names.update({str(k): str(v) for k, v in (conf.get('column_map') or {}).items()})
+    if columns is None:
+        columns = station_columns(config_dict) or set()
+    if other_columns is None:
+        other_columns = set()
+        for binding in other_bindings(config_dict):
+            other_columns |= binding_columns(config_dict, binding) or set()
+    known = set(columns) | set(other_columns)
+    named = configured_fields(config_dict) | set(HttpMapper.default_map)
+    return {name: field for name, field in names.items()
+            if name in known and name not in named and name != field}
+
+
 def use_station_columns(config_dict, label=DRIVER_NAME):
     """Have the driver's field maps put the fields station_column_map() finds
-    in their station database columns, and log them. Returns the map."""
+    in their station database columns, and copy those conventional_name_map()
+    finds to their conventional names (with the driver field's unit group),
+    and log them. Returns the station column map."""
 
     FieldMapper.station_columns = station_column_map(config_dict)
     if FieldMapper.station_columns:
         log.info('%s: using station database columns %s', label,
                  ', '.join(f"{c} ({' or '.join(f)})" for c, f in FieldMapper.station_columns.items()))
+    FieldMapper.conventional_names = conventional_name_map(config_dict)
+    for name, field in FieldMapper.conventional_names.items():
+        group = (weewx.units.obs_group_dict.get(field)
+                 or DEFAULT_GROUPS.get(HttpMapper.default_map.get(field, '')))
+        if group and name not in weewx.units.obs_group_dict:
+            weewx.units.obs_group_dict[name] = group
+    if FieldMapper.conventional_names:
+        log.info('%s: also using the names %s', label,
+                 ', '.join(f'{n} ({f})' for n, f in FieldMapper.conventional_names.items()))
     return FieldMapper.station_columns
 
 
@@ -2307,7 +2439,15 @@ class EcowittAdditions(weewx.engine.StdService):
         self.binding = conf.get('data_binding', ADDITIONS_BINDING)
         self.main_binding = (config_dict.get('StdArchive') or {}).get('data_binding', 'wx_binding')
         self.xtype = None
+        # columns of other extensions' databases (DivumWX's divumwx_extras.sdb
+        # ...): those extensions keep the fields of those names
+        self.elsewhere = set()
         if self.enabled:
+            for binding in other_bindings(config_dict):
+                columns = binding_columns(config_dict, binding) or set()
+                self.elsewhere |= columns - {'dateTime', 'usUnits', 'interval'}
+                if columns:
+                    log.info('EcowittAdditions: fields with a column in %s are left to it', binding)
             self.bind(weewx.NEW_ARCHIVE_RECORD, self.new_archive_record)
             log.info("EcowittAdditions: fields the %s database has no column for are archived "
                      "with %s", self.main_binding, self.binding)
@@ -2328,6 +2468,10 @@ class EcowittAdditions(weewx.engine.StdService):
         """Store a record's fields that the station's database has no column for."""
 
         main_columns = set(self.engine.db_binder.get_manager(self.main_binding).sqlkeys)
+        # a reading copied to a conventional name is kept by the database
+        # with that column (the station's or another extension's)
+        conventional = FieldMapper.conventional_names
+        main_columns |= set(conventional) | set(conventional.values()) | self.elsewhere
         extra = {k: v for k, v in record.items()
                  if k not in main_columns and COLUMN_NAME.match(k)
                  and (v is None or isinstance(v, (int, float)))}
@@ -3919,6 +4063,9 @@ def accumulator_extractors():
     for column, fields in STATION_COLUMNS.items():
         if any(extractors.get(f) == 'last' for f in fields):
             extractors.setdefault(column, 'last')
+    for name, field in CONVENTIONAL_NAMES.items():
+        if extractors.get(field) == 'last':
+            extractors.setdefault(name, 'last')
     return extractors
 
 
@@ -11234,6 +11381,11 @@ class DirectEcowittDevice:
             print('These driver fields go to standard station database columns (battery levels as 0 OK, 1 low):')
             for column, fields in FieldMapper.station_columns.items():
                 print(f"{column:>23}: {' or '.join(fields)}")
+        if FieldMapper.conventional_names:
+            print()
+            print('These driver fields are also given the conventional name a database has a column for:')
+            for name, field in FieldMapper.conventional_names.items():
+                print(f"{name:>23}: {field}")
 
     def display_sensor_map(self):
         """Display multi-channel sensors, their device and reported channels."""

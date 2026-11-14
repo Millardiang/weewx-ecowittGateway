@@ -79,7 +79,8 @@ def test_variables_make_a_driver_install(monkeypatch, gateway):
     assert conf['StdArchive']['record_generation'] == 'software'
     assert section['ip_address'] == gateway.address and section['poll_interval'] == '30'
     assert section['catchup']['source'] == 'none'
-    assert section['loop_json'] == {'enable': 'True', 'path': '/tmp/x', 'units': 'native'}
+    assert section['loop_json'] == {'enable': 'True', 'path': '/tmp/x', 'units': 'native',
+                                    'append_units_label': 'False'}
     assert section['mqtt']['host'] == 'broker' and section['mqtt']['password'] == 'p w'
     # the rain source, through the driver's ConfEditor
     assert conf['StdWXCalculate']['Delta']['rain']['input'] == 'p_rainyear'
@@ -355,7 +356,8 @@ def test_additions_database_by_default(monkeypatch, gateway):
     assert conf['DataBindings']['ecowitt_binding']['schema'] == 'user.weewx-ecowittGateway.ADDITIONS_SCHEMA'
     assert conf['Databases']['ecowitt_sqlite']['database_name'] == 'ecowitt_additions.sdb'
     assert 'user.weewx-ecowittGateway.EcowittAdditions' in conf['Engine']['Services']['archive_services']
-    assert any("no column for, in ecowitt_additions.sdb: y  (default)" in line for line in lines)
+    assert any("ecowitt_additions.sdb? (n if another extension" in line and line.endswith(": y  (default)")
+               for line in lines), lines
 
 
 def test_additions_database_declined(monkeypatch, gateway):

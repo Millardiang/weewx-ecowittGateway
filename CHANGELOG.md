@@ -3,6 +3,26 @@
 All notable changes to weewx-ecowittGateway are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] – 14 November 2026
+
+### Added
+
+- **Units in MQTT and ecwLoop.json field names**: `append_units_label = True` in `[[mqtt]]` or
+  `[[loop_json]]` adds each field's unit to its name (`outTemp_C`, `windSpeed_mps`, `rain_mm`),
+  as the weewx-mqtt extension does; fields without a unit (`outHumidity`, `windDir`) keep their
+  name. The label follows `units`. Off by default.
+- **Conventional names for other extensions' databases**: when a database in `[DataBindings]` has a
+  column such as `p_dayRain`, `p_rainRate`, `hourRain`, `isRaining` or `lightning_last_det_time`
+  (DivumWX's `divumwx_extras.sdb` does), loop packets also carry the reading under that name, so
+  the extension stores it; the driver's own field stays. Fields with a column in another
+  extension's database aren't also stored in the additions database. `[[additions]]
+  [[[column_map]]]` adds or changes names, `other_bindings` limits the bindings looked at.
+
+### Changed
+
+- The installer's additions database and `ecwLoop.json` questions say to answer **n** when a skin
+  or extension such as DivumWX keeps its own; the README has a section on turning both off.
+
 ## [2.0.0] – 12 November 2026
 
 weewx-ecowittGateway is a WeeWX driver and service for Ecowitt gateways and consoles, built on

@@ -365,19 +365,19 @@
 "lines": 5
 },
 "--version": {
-"digest": "09fce3fea3215b1d",
+"digest": "7f2fce97594a6e52",
 "lines": 1
 },
 "--version [down]": {
-"digest": "09fce3fea3215b1d",
+"digest": "7f2fce97594a6e52",
 "lines": 1
 },
 "--version [null]": {
-"digest": "09fce3fea3215b1d",
+"digest": "7f2fce97594a6e52",
 "lines": 1
 },
 "--version [sparse]": {
-"digest": "09fce3fea3215b1d",
+"digest": "7f2fce97594a6e52",
 "lines": 1
 },
 "--weewx-fields": {

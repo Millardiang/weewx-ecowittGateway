@@ -13,7 +13,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 Built on the installer for Gary Roderick's Ecowitt Local HTTP API driver
 (ecowitt_http.py 0.1.0a28).
 
-Version: 2.0.0
+Version: 2.1.0
 
 The installer asks for the gateway settings and writes them to weewx.conf,
 with the [EcowittGateway] section placed directly after [Station]. Without a
@@ -28,6 +28,8 @@ scripted:
 ECOWITT_NO_PROMPT=yes stops the installer asking anything, even at a terminal.
 
 Revision History
+    2.1.0 (14 November 2026)
+        -   [[mqtt]] and [[loop_json]] append_units_label = False
     2.0.0 (12 November 2026)
         -   installs weewx-ecowittGateway; moves an [EcowittHttp] section
             (ecowitt_http.py) to [EcowittGateway]
@@ -60,7 +62,7 @@ import weewx
 
 
 REQUIRED_WEEWX_VERSION = "5.0.0"
-DRIVER_VERSION = "2.0.0"
+DRIVER_VERSION = "2.1.0"
 SECTION = 'EcowittGateway'
 # ecowitt_http.py's section and service, moved to the names above
 LEGACY_SECTION = 'EcowittHttp'
@@ -140,15 +142,19 @@ ecowitt_config = """
 
     # Write each loop packet to a JSON file for web pages and scripts. A
     # relative path is relative to the WeeWX web pages folder (HTML_ROOT).
-    # units: native, us, metric or metricwx
+    # units: native, us, metric or metricwx. append_units_label adds each
+    # field's unit to its name, as the weewx-mqtt extension does (outTemp_C,
+    # windSpeed_mps; outHumidity and windDir have none).
     [[loop_json]]
         enable = False
         path = ecwLoop.json
         units = native
+        append_units_label = False
 
     # Publish each loop packet to an MQTT broker (needs paho-mqtt).
     # format: json (one message on <topic>/loop), individual (one message per
-    # field on <topic>/<field>) or both
+    # field on <topic>/<field>) or both; units and append_units_label as
+    # for loop_json
     [[mqtt]]
         enable = False
         host = localhost
@@ -158,6 +164,7 @@ ecowitt_config = """
         topic = weewx/ecowitt
         format = json
         units = native
+        append_units_label = False
         retain = False
         tls = False
 
@@ -169,7 +176,9 @@ ecowitt_config = """
     # fills the standard columns the Seasons skin shows from the fields with
     # the same purpose: wh25_batt to inTempBatteryStatus, wn31_ch1_batt to
     # batteryStatus1, the WH40 battery level to rainBatteryStatus (0 OK, 1 low)
-    # and so on.
+    # and so on. It also gives a reading the conventional name a column in
+    # another database in [DataBindings] has (p_dayRain, isRaining ...), so the
+    # extension that owns it (DivumWX ...) stores it.
     [[additions]]
         enable = False
         data_binding = ecowitt_binding
@@ -586,6 +595,22 @@ ecowitt_config = """
     [[signal7]]
         extractor = last
     [[signal8]]
+        extractor = last
+    [[isRaining]]
+        extractor = last
+    [[lightning_last_det_time]]
+        extractor = last
+    [[hourRain]]
+        extractor = last
+    [[p_hourRain]]
+        extractor = last
+    [[p_dayRain]]
+        extractor = last
+    [[p_weekRain]]
+        extractor = last
+    [[p_monthRain]]
+        extractor = last
+    [[p_yearRain]]
         extractor = last
     # End weewx-ecowittGateway extractors
 """
@@ -1111,7 +1136,8 @@ class EcowittHttpInstaller(ExtensionInstaller):
                                   str(existing.get('radiation_from_illuminance', replacing_earlier)).lower() == 'true',
                                   env='RADIATION')
         additions = self._ask_yes('Archive the fields the WeeWX database has no column for, in '
-                                  'ecowitt_additions.sdb?',
+                                  'ecowitt_additions.sdb? (n if another extension, such as DivumWX, '
+                                  'keeps its own database)',
                                   str((existing.get('additions') or {}).get('enable', True)).lower() == 'true',
                                   env='ADDITIONS')
         loop_on_init = None
@@ -1415,7 +1441,8 @@ class EcowittHttpInstaller(ExtensionInstaller):
                      'tmp': os.path.join('/tmp', name)}
         path = str(current.get('path', name))
         location = next((k for k, v in locations.items() if v == path), 'custom')
-        enable = self._ask_yes(f'Write each loop packet to {name} (for web pages and scripts)?',
+        enable = self._ask_yes(f'Write each loop packet to {name} (for web pages and scripts)? '
+                               '(n if a skin or extension, such as DivumWX, writes its own)',
                                str(current.get('enable', 'False')).lower() == 'true', env='LOOP_JSON')
         if not enable:
             return {'enable': 'False'}

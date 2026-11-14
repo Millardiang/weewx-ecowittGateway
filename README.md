@@ -1,6 +1,6 @@
 # weewx-ecowittGateway
 
-**Version:** 2.0.0 · WeeWX driver and service for Ecowitt gateways and consoles
+**Version:** 2.1.0 · WeeWX driver and service for Ecowitt gateways and consoles
 (local HTTP API, or the TCP API for the GW1000)
 
 weewx-ecowittGateway is built on Gary Roderick's Ecowitt local HTTP API driver (`ecowitt_http.py`
@@ -50,17 +50,17 @@ Vagrant or Ansible. The summary follows.
 
     For WeeWX package installs:
 
-        weectl extension install weewx-ecowittGateway-2.0.0.zip
+        weectl extension install weewx-ecowittGateway-2.1.0.zip
 
     For WeeWX *pip* installs the Python virtual environment must be activated before the extension is installed:
 
         source ~/weewx-venv/bin/activate
-        weectl extension install weewx-ecowittGateway-2.0.0.zip
+        weectl extension install weewx-ecowittGateway-2.1.0.zip
 
     For WeeWX installs from *git* the Python virtual environment must be activated before the extension is installed:
 
         source ~/weewx-venv/bin/activate
-        python3 ~/weewx/src/weectl.py extension install weewx-ecowittGateway-2.0.0.zip
+        python3 ~/weewx/src/weectl.py extension install weewx-ecowittGateway-2.1.0.zip
 
     The installer asks for the device IP address (and checks it), whether to use the device as the
     station driver or as a service, which rain gauge WeeWX `rain` comes from, and the optional
@@ -234,8 +234,37 @@ written to a JSON file and/or published to an MQTT broker (needs the *paho-mqtt*
             topic = weewx/ecowitt
             format = json            # json (<topic>/loop), individual (<topic>/<field>) or both
             units = native
+            append_units_label = False
 
 The `EcowittGatewayExport` service in `restful_services` does this in both driver and service mode.
+The field names are WeeWX's (`outTemp`, `windSpeed`), with `usUnits` giving the unit system. With
+`append_units_label = True` (in either section) each field's unit is added to its name, as the
+*weewx-mqtt* extension does, so `outTemp_C`, `windSpeed_mps`, `rain_mm`, `pm2_5_microgram_per_meter_cubed`
+and `wh40_batt_count`; `outHumidity`, `windDir`, `UV` and fields without a unit stay as they are.
+The label follows `units` (`outTemp_F` with `units = us`).
+
+### Using another extension's live data or database
+
+Skins and extensions such as weewx-DivumWX write their own live JSON data and keep their own
+database for the fields WeeWX has no column for. With one of those, turn off the driver's own
+`ecwLoop.json` and additions database, so the same data isn't written twice:
+
+    [EcowittGateway]
+        [[loop_json]]
+            enable = False
+        [[additions]]
+            enable = False
+
+then restart WeeWX. The installer asks about both; answer **n** to each. Nothing is lost: every
+field the driver produces is still in each loop packet, which is where those extensions read it.
+When the extension's database has a column with the conventional name for one of the driver's
+readings (`p_dayRain`, `isRaining` …), the driver also gives the reading that name, so it is
+stored there. That works with the additions database on or off (see *Conventional names in other
+databases* under [Fields, the database and [Accumulator]](#fields-the-database-and-accumulator)).
+
+With the additions database off, skins can't use fields that have no column anywhere, and the
+standard Seasons columns (`rainBatteryStatus`, `batteryStatus1` …) are still filled.
+`[[mqtt]]` is separate and stays as you set it.
 
 ### GW1000
 
@@ -364,6 +393,29 @@ column is used only if it is in the station's database and no field map setting 
 driver field isn't named in a field map setting. The columns used are logged at startup and listed
 by `weectl device --active-map`. Set `[[additions]] use_station_columns = False` to keep the driver's
 names (this works with or without the additions database).
+
+**Conventional names in other databases.** Some extensions keep their own database for fields WeeWX
+has no column for, and name the columns as other drivers do. DivumWX's `divumwx_extras.sdb`, for
+example, has `p_dayRain` and `isRaining`. The driver looks at the columns of every database in
+`[DataBindings]`. When one has a column with the conventional name for one of its readings, the
+driver also puts the reading in each loop packet under that name, so that extension stores it. The
+driver's own field stays too, because `[[Delta]]` and the other fields use it:
+
+| Conventional name | Driver field |
+|---|---|
+| `p_rainRate`, `p_hourRain`, `p_dayRain`, `p_weekRain`, `p_monthRain`, `p_yearRain` | `p_rainrate`, `p_rainhour`, `p_rainday`, `p_rainweek`, `p_rainmonth`, `p_rainyear` |
+| `hourRain` | `t_rainhour` |
+| `isRaining` | `is_raining` |
+| `lightning_last_det_time` | `lightningdettime` |
+
+`dayRain`, `weekRain`, `monthRain`, `yearRain`, `stormRain` and `p_stormRain` aren't on the list:
+extensions with those columns work them out themselves. Fields with a column in another extension's
+database are left to it, not stored in the additions database too. `[[additions]]
+[[[column_map]]]` adds names or changes them (`name = driver field`), and `[[additions]]
+other_bindings` limits which bindings are looked at (`none` for none). The names used are logged at
+startup and listed by `weectl device --active-map`. With such an extension you can turn off the
+driver's own `[[loop_json]]` and `[[additions]]`: the extension gets every field from the loop
+packets.
 
 The database is set in `[DataBindings] [[ecowitt_binding]]` and `[Databases] [[ecowitt_sqlite]]`
 (SQLite; point the binding at a MySQL database instead if you use one). Uninstalling leaves the file.
@@ -531,7 +583,7 @@ Every installer question can be answered with an `ECOWITT_*` environment variabl
 be scripted (for example in a Vagrant or Ansible provisioner):
 
     sudo ECOWITT_NO_PROMPT=yes ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \
-        weectl extension install --yes weewx-ecowittGateway-2.0.0.zip
+        weectl extension install --yes weewx-ecowittGateway-2.1.0.zip
 
 Questions without a variable take their default (the existing setting where there is one), and the
 installer prints each answer and where it came from. A variable with a value the installer cannot

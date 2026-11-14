@@ -227,3 +227,9 @@ def test_sensors_show_rssi_and_the_wh40_voltage(egw, http_config, gateway, capsy
     assert 'signal: 4 rssi: -71 battery: 4 (1.6V) (OK)' in wh40
     ws90 = next(line for line in lines if line.startswith('WS90 '))
     assert 'rssi: -62' in ws90
+
+
+def test_live_data_shows_radiation_and_the_station_fields(egw, http_config, capsys):
+    out = run(egw, http_config, capsys, '--live-data')
+    assert 'illuminance: 27291 lx' in out and 'radiation: 215 W/m²' in out
+    assert 'stationtype: GW2000A_V3.1.4' in out and 'apName: GW2000A-WIFI1234' in out and 'gain0: 1' in out

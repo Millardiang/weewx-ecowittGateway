@@ -26,9 +26,12 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 2.1.1
+Version: 2.1.2
 
 Revision History
+    2.1.2 (14 November 2026)
+        - radiation by default, as well as illuminance; shown by --live-data
+        - heap_free, stationtype, model, apName, gain0-gain5 loop fields
     2.1.1 (14 November 2026)
         - weectl device --sensors shows rssi and the WH40 battery voltage;
           wh40_volt, and wh68_volt/ws80_volt from the TCP API
@@ -165,6 +168,7 @@ import weecfg
 import weeutil.weeutil
 import weeutil.logger
 import weedb
+import weewx.accum
 import weewx.defaults
 import weewx.drivers
 import weewx.engine
@@ -178,7 +182,7 @@ log = logging.getLogger(__name__)
 
 
 DRIVER_NAME = 'EcowittGateway'
-DRIVER_VERSION = '2.1.1'
+DRIVER_VERSION = '2.1.2'
 # config section used by ecowitt_http.py; read if there is no [EcowittGateway]
 LEGACY_DRIVER_NAME = 'EcowittHttp'
 # this module, as WeeWX loads it
@@ -475,6 +479,12 @@ DEFAULT_GROUPS = {
     'ch_lds.4.heat': 'group_count',
     'ch_lds.4.voltage': 'group_volt',
     'debug.heap': 'group_data',
+    # station.*: text, no unit group (see STATION_TEXT_FIELDS)
+    'station.stationtype': None,
+    'station.model': None,
+    'station.apName': None,
+    'rain.gain0': 'group_count',
+    **{f'piezoRain.gain{n}': 'group_count' for n in range(1, 6)},
     'debug.runtime': 'group_deltatime',
     'debug.usr_interval': 'group_deltatime',
     'debug.is_cnip': 'group_boolean',
@@ -1138,6 +1148,12 @@ class HttpMapper(FieldMapper):
         'extraTemp14': 'ch_temp.6.temp',
         'extraTemp15': 'ch_temp.7.temp',
         'extraTemp16': 'ch_temp.8.temp',
+        'heap_free': 'debug.heap',
+        'stationtype': 'station.stationtype',
+        'model': 'station.model',
+        'apName': 'station.apName',
+        'gain0': 'rain.gain0',
+        **{f'gain{n}': f'piezoRain.gain{n}' for n in range(1, 6)},
         'co2': 'co2.CO2',
         'co2_24h_avg': 'co2.CO2_24H',
         'co2_temp': 'co2.temp',
@@ -1461,10 +1477,10 @@ class HttpMapper(FieldMapper):
         """
 
         for w_field, e_field in self.field_map.items():
-            if w_field not in weewx.units.obs_group_dict.keys():
+            if w_field not in weewx.units.obs_group_dict.keys() and DEFAULT_GROUPS.get(e_field):
                 # the WeeWX field is not in the obs_group_dict so add an entry
                 # for the WeeWX field using the group previously assigned to
-                # the source Ecowitt field
+                # the source Ecowitt field (text fields have none)
                 weewx.units.obs_group_dict[w_field] = DEFAULT_GROUPS[e_field]
 
 
@@ -2084,6 +2100,8 @@ class LoopJsonWriter:
             return
         try:
             tmp_path = f'{self.path}.tmp'
+            # a new station's web pages folder is only made by the first report
+            os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
             with open(tmp_path, 'w') as f:
                 json.dump(export_packet(packet, self.units, self.append_units_label), f,
                           default=str, sort_keys=True)
@@ -2703,7 +2721,7 @@ class GatewaySource:
         # radiation_from_illuminance is set and radiation isn't mapped to
         # something
         self.radiation_from_illuminance = (
-            weeutil.weeutil.tobool(config.get('radiation_from_illuminance', False))
+            weeutil.weeutil.tobool(config.get('radiation_from_illuminance', True))
             and 'radiation' not in fmap)
         # ignore the readings of multi-channel sensors that report signal 0
         self.ignore_no_signal = weeutil.weeutil.tobool(config.get('ignore_no_signal', False))
@@ -3779,6 +3797,7 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
 
         log.info('EcowittHttpService: version is %s' % DRIVER_VERSION)
         use_station_columns(config_dict, 'EcowittHttpService')
+        register_text_accumulators()
         self.unit_system = DEFAULT_UNIT_SYSTEM
         try:
             EcowittCommon.__init__(self, unit_system=self.unit_system, label='EcowittHttpService',
@@ -4061,7 +4080,8 @@ def _keeps_last_value(source):
     totals, the lightning count, distance and time, the day's maximum wind,
     the 10 minute average wind direction and 24 hour averages and AQIs."""
 
-    if source.endswith(('.battery', '.signal', '_24HAQI', '_24H')) or source.startswith('lightning.'):
+    if (source.endswith(('.battery', '.signal', '_24HAQI', '_24H')) or source.startswith(('lightning.', 'station.'))
+            or source in ('rain.gain0',) or source.startswith('piezoRain.gain')):
         return True
     if source in HttpMapper.default_rain_map.values():
         # a rain rate is averaged
@@ -4089,12 +4109,31 @@ def accumulator_extractors():
     return extractors
 
 
+# text fields (the station's firmware, model and access point name): WeeWX can
+# only keep their first or last value, with the firstlast accumulator
+STATION_TEXT_FIELDS = ('stationtype', 'model', 'apName')
+TEXT_ACCUMULATOR = {'accumulator': 'firstlast', 'extractor': 'last'}
+
+
+def register_text_accumulators():
+    """Give WeeWX the firstlast accumulator for STATION_TEXT_FIELDS, after any
+    [Accumulator] entries in weewx.conf (which come first), so a weewx.conf
+    without them can't stop archiving. Done once."""
+
+    if not getattr(register_text_accumulators, 'done', False):
+        weewx.accum.accum_dict.extend({f: dict(TEXT_ACCUMULATOR) for f in STATION_TEXT_FIELDS})
+        register_text_accumulators.done = True
+
+
 def accumulator_config_str():
     """The driver's [Accumulator] entries, as a weewx.conf snippet."""
 
     lines = ['[Accumulator]', '    # Start weewx-ecowittGateway extractors']
     for field, extractor in accumulator_extractors().items():
-        lines += [f'    [[{field}]]', f'        extractor = {extractor}']
+        lines += [f'    [[{field}]]']
+        if field in STATION_TEXT_FIELDS:
+            lines.append(f"        accumulator = {TEXT_ACCUMULATOR['accumulator']}")
+        lines.append(f'        extractor = {extractor}')
     lines.append('    # End weewx-ecowittGateway extractors')
     return '\n'.join(lines) + '\n'
 
@@ -4224,6 +4263,7 @@ def std_archive_interval(config_dict):
 
 def loader(config_dict, engine):
     use_station_columns(config_dict)
+    register_text_accumulators()
     driver = EcowittHttpDriver(archive_interval=std_archive_interval(config_dict),
                                counters=counter_fields(config_dict),
                                **driver_config(config_dict))
@@ -6665,11 +6705,30 @@ class EcowittHttpCollector(Collector):
         # appearing twice under two different fields, but later field mapping
         # will take care of this.
         curr_data.update(self.device.get_sensors_data())
+        curr_data.update(self.station_info())
         # report any mapped multi-channel sensors on their fixed channels
         curr_data = self.sensor_mapper.apply(curr_data)
         if weewx.debug >= 3:
             log_dict('Current data: ', curr_data, logging.DEBUG)
         return curr_data
+
+    # how often the station's firmware, access point name and rain gains are
+    # read again (seconds)
+    STATION_INFO_INTERVAL = 600
+
+    def station_info(self):
+        """The device's get_station_info(), read at most every
+        STATION_INFO_INTERVAL seconds ({} for a GW1000 on the TCP API)."""
+
+        if not isinstance(self.device, EcowittDevice):
+            # a GW1000 on the TCP API
+            return {}
+        get = self.device.get_station_info
+        now = time.time()
+        if now >= getattr(self, '_station_info_next', 0):
+            self._station_info = get()
+            self._station_info_next = now + self.STATION_INFO_INTERVAL
+        return self._station_info
 
     def startup(self):
         """Start a thread that collects data from the API."""
@@ -8715,6 +8774,41 @@ class EcowittDevice:
 
         cal_data = self.api.get_cli_soilad()
         return self.parser.parse_get_cli_soilad(cal_data)
+
+    def get_station_info(self):
+        """The station's text and settings fields: firmware (station.stationtype,
+        eg 'GW3000B_V1.2.5'), model (station.model, 'GW3000B'), access point
+        name (station.apName), and rain gains (rain.gain0, piezoRain.gain1-5),
+        as dotted fields. Each part is left out if the device doesn't give it."""
+
+        info = {}
+        try:
+            version = str((self.api.get_version() or {}).get('version', ''))
+            stationtype = version.split(':', 1)[-1].strip()
+            if stationtype:
+                info['station.stationtype'] = stationtype
+                info['station.model'] = stationtype.split('_V')[0]
+        except Exception as e:
+            log.debug('get_station_info: no version: %s', e)
+        try:
+            ap_name = self.get_device_info_data().get('ap')
+            if ap_name:
+                info['station.apName'] = ap_name
+        except Exception as e:
+            log.debug('get_station_info: no device info: %s', e)
+        try:
+            gain = self.get_rain_totals().get('rain_gain')
+            if gain is not None:
+                info['rain.gain0'] = gain
+        except Exception as e:
+            log.debug('get_station_info: no rain totals: %s', e)
+        try:
+            piezo = self.get_piezo_rain_data()
+            info.update({f'piezoRain.gain{n}': piezo[f'gain{n}'] for n in range(1, 6)
+                         if piezo.get(f'gain{n}') is not None})
+        except Exception as e:
+            log.debug('get_station_info: no piezo rain data: %s', e)
+        return info
 
     def get_device_info_data(self):
         """Get device info data."""
@@ -11580,6 +11674,14 @@ class DirectEcowittDevice:
             # system there is no usUnits field present. We need usUnits to do
             # our unit conversion so add in the usUnits field.
             mapped_data['usUnits'] = self.unit_system
+            # the light sensor's reading as WeeWX radiation (W/m2) too, as the
+            # driver records it (radiation_from_illuminance, default on)
+            if (weeutil.weeutil.tobool(self.stn_dict.get('radiation_from_illuminance', True))
+                    and mapped_data.get('illuminance') is not None and 'radiation' not in mapped_data):
+                groups = weewx.units.std_groups[self.unit_system]
+                light = weewx.units.ValueTuple(mapped_data['illuminance'], groups['group_illuminance'],
+                                               'group_illuminance')
+                mapped_data['radiation'] = weewx.units.convert(light, groups['group_radiation']).value
             datetime = mapped_data.pop('datetime', int(time.time()))
             # TODO. Is this needed?
             # extend the WeeWX obs_group_dict with our Ecowitt device
@@ -11601,6 +11703,10 @@ class DirectEcowittDevice:
             result = {}
             for key in mapped_data:
                 if key == 'usUnits':
+                    continue
+                if isinstance(mapped_data[key], str):
+                    # text (stationtype, model, apName)
+                    result[key] = mapped_data[key]
                     continue
                 key_vt = weewx.units.as_value_tuple(mapped_data, key)
                 key_vh = weewx.units.ValueHelper(key_vt, formatter=f, converter=c)
@@ -12201,6 +12307,10 @@ class DirectEcowittDevice:
                 result = {}
                 for key in pkt.keys():
                     if key == 'usUnits':
+                        continue
+                    if isinstance(pkt[key], str):
+                        # text (stationtype, model, apName)
+                        result[key] = pkt[key]
                         continue
                     key_vt = weewx.units.as_value_tuple(pkt, key)
                     key_vh = weewx.units.ValueHelper(key_vt, formatter=f, converter=c)

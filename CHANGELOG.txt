@@ -4,6 +4,27 @@ CHANGELOG
 All notable changes to weewx-ecowittGateway are recorded here. Versions follow Semantic Versioning
 (https://semver.org/).
 
+[2.1.2] – 14 November 2026
+==========================
+
+Fixed
+-----
+
+- Installing over an earlier weewx-EcowittGateway extension recorded under another name left its
+  extension record and weewx-EcowittGateway.py in place. The installer now finds the record by the
+  file its installer installs, and removes a weewx-EcowittGateway.py left without its record.
+- radiation is recorded by default, as well as illuminance: the gateway shows the light sensor as
+  solar radiation (W/m²) or illuminance (lux), the same reading. The installer no longer asks
+  (radiation_from_illuminance = False to turn it off), and weectl device --live-data shows radiation
+  too.
+
+Added
+-----
+
+- heap_free (the gateway's free memory), stationtype (firmware, eg GW3000B_V1.2.5), model, apName
+  and the rain gains gain0 (tipping) and gain1–gain5 (piezo) in each loop packet, as earlier
+  versions had. The text fields keep their last value in archive records (accumulator = firstlast).
+
 [2.1.1] – 14 November 2026
 ==========================
 

@@ -13,7 +13,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 Built on the installer for Gary Roderick's Ecowitt Local HTTP API driver
 (ecowitt_http.py 0.1.0a28).
 
-Version: 2.1.1
+Version: 2.1.2
 
 The installer asks for the gateway settings and writes them to weewx.conf,
 with the [EcowittGateway] section placed directly after [Station]. Without a
@@ -28,6 +28,10 @@ scripted:
 ECOWITT_NO_PROMPT=yes stops the installer asking anything, even at a terminal.
 
 Revision History
+    2.1.2 (14 November 2026)
+        -   removes an earlier weewx-EcowittGateway extension recorded under
+            another name, and a weewx-EcowittGateway.py left without its record
+        -   radiation_from_illuminance = True, not asked
     2.1.1 (14 November 2026)
         -   no installer changes
     2.1.0 (14 November 2026)
@@ -64,7 +68,7 @@ import weewx
 
 
 REQUIRED_WEEWX_VERSION = "5.0.0"
-DRIVER_VERSION = "2.1.1"
+DRIVER_VERSION = "2.1.2"
 SECTION = 'EcowittGateway'
 # ecowitt_http.py's section and service, moved to the names above
 LEGACY_SECTION = 'EcowittHttp'
@@ -105,9 +109,10 @@ ecowitt_config = """
 
     # Whether to show battery state for sensors with no signal
     show_all_batt = False
-    # Whether to record WeeWX radiation (W/m2), worked out from the light
-    # sensor's illuminance (lux) with Ecowitt's factor
-    radiation_from_illuminance = False
+    # Whether to record WeeWX radiation (W/m2), the solar radiation the gateway
+    # shows, as well as illuminance (lux): the light sensor's reading in both
+    # units, with Ecowitt's factor (126.7 lux per W/m2)
+    radiation_from_illuminance = True
 
     # With debug logging on, whether to log 'Next update in N seconds' after
     # every poll
@@ -227,6 +232,27 @@ ecowitt_config = """
     [[lightningdettime]]
         extractor = last
     [[lightningcount]]
+        extractor = last
+    [[stationtype]]
+        accumulator = firstlast
+        extractor = last
+    [[model]]
+        accumulator = firstlast
+        extractor = last
+    [[apName]]
+        accumulator = firstlast
+        extractor = last
+    [[gain0]]
+        extractor = last
+    [[gain1]]
+        extractor = last
+    [[gain2]]
+        extractor = last
+    [[gain3]]
+        extractor = last
+    [[gain4]]
+        extractor = last
+    [[gain5]]
         extractor = last
     [[co2_24h_avg]]
         extractor = last
@@ -1130,13 +1156,11 @@ class EcowittHttpInstaller(ExtensionInstaller):
         show_batt = self._ask_yes('Show battery state for sensors with no signal?',
                                   str(existing.get('show_all_batt', 'False')).lower() == 'true',
                                   env='SHOW_ALL_BATT')
-        # the earlier weewx-EcowittGateway extension recorded radiation; its
-        # settings have rain_source
-        replacing_earlier = 'rain_source' in existing
-        radiation = self._ask_yes("Record WeeWX 'radiation' (W/m2), worked out from the light sensor "
-                                  "(illuminance, lux)?",
-                                  str(existing.get('radiation_from_illuminance', replacing_earlier)).lower() == 'true',
-                                  env='RADIATION')
+        # radiation is recorded (as well as illuminance) unless the setting
+        # or ECOWITT_RADIATION says otherwise; not asked
+        radiation = _env_bool('RADIATION')
+        if radiation is None:
+            radiation = str(existing.get('radiation_from_illuminance', True)).lower() == 'true'
         additions = self._ask_yes('Archive the fields the WeeWX database has no column for, in '
                                   'ecowitt_additions.sdb? (n if another extension, such as DivumWX, '
                                   'keeps its own database)',
@@ -1504,17 +1528,56 @@ class EcowittHttpInstaller(ExtensionInstaller):
             return os.path.exists(own) and os.path.samefile(path, own)
 
         own_file = os.path.join(user_dir or '', os.path.basename(MODULE.replace('.', '/')) + '.py')
-        changes = []
+        own_record = os.path.join(ext_dir, 'weewx-ecowittGateway')
+        dry_run = getattr(engine, 'dry_run', False)
+
+        def remove_file(filename):
+            """Remove a replaced extension's file (and its compiled copies), if it isn't ours."""
+            if not user_dir:
+                return False
+            removed = False
+            for path in [os.path.join(user_dir, filename)] + glob.glob(
+                    os.path.join(user_dir, '__pycache__', glob.escape(filename[:-3]) + '.*.pyc')):
+                if os.path.isfile(path) and not ours(path, own_file):
+                    if not dry_run:
+                        os.remove(path)
+                    removed = True
+            return removed
+
+        # the records of the extensions this replaces: by name, or any other
+        # record whose installer installs one of their files (an earlier
+        # version may have used another name)
+        records = {}
         for name, filename, description in REPLACED_EXTENSIONS:
+            records[os.path.join(ext_dir, name)] = (filename, description)
+        try:
+            names = os.listdir(ext_dir)
+        except OSError:
+            names = []
+        for name in names:
             record = os.path.join(ext_dir, name)
-            if not os.path.isdir(record) or ours(record, os.path.join(ext_dir, 'weewx-ecowittGateway')):
+            if record in records or not os.path.isdir(record):
                 continue
-            if not getattr(engine, 'dry_run', False):
+            try:
+                with open(os.path.join(record, 'install.py'), encoding='utf-8', errors='replace') as f:
+                    text = f.read()
+            except OSError:
+                continue
+            for _, filename, description in REPLACED_EXTENSIONS:
+                if re.search(r'["\'/]' + re.escape(filename) + r'["\']', text):
+                    records[record] = (filename, f'{description[:-1]}, installed as {name})'
+                                       if description.endswith(')') else f'{description} ({name})')
+                    break
+        changes = []
+        for record, (filename, description) in records.items():
+            if not os.path.isdir(record) or ours(record, own_record):
+                continue
+            if not dry_run:
                 shutil.rmtree(record)
-                if user_dir:
-                    for path in [os.path.join(user_dir, filename)] + glob.glob(
-                            os.path.join(user_dir, '__pycache__', glob.escape(filename[:-3]) + '.*.pyc')):
-                        if os.path.isfile(path) and not ours(path, own_file):
-                            os.remove(path)
+            remove_file(filename)
             changes.append(f'removed {description}, which this replaces; its settings are kept')
+        # a replaced extension's file left without its record
+        for _, filename, description in REPLACED_EXTENSIONS:
+            if filename != LEGACY_FILE and remove_file(filename):
+                changes.append(f'removed {filename}, left by {description}')
         return changes

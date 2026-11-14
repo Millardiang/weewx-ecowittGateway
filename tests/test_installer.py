@@ -371,3 +371,33 @@ def test_additions_setting_kept_on_reinstall(monkeypatch, gateway):
     conf, _ = run(WEEWX_CONF + f"[EcowittGateway]\n    ip_address = {gateway.address}\n"
                                "    [[additions]]\n        enable = False\n")
     assert conf['EcowittGateway']['additions']['enable'] == 'False'
+
+
+def test_old_extension_under_another_name_is_removed(tmp_path):
+    """An earlier version recorded under another name is found by the file its installer installs."""
+    engine, user, ext = make_roots(tmp_path, 'copy', 'copy')
+    (ext / 'weewx-EcowittGateway').rename(ext / 'EcowittGateway')
+    (ext / 'EcowittGateway' / 'install.py').write_text(
+        "files=[('bin/user', ['bin/user/weewx-EcowittGateway.py'])]")
+    (ext / 'SomethingElse').mkdir()
+    (ext / 'SomethingElse' / 'install.py').write_text("files=[('bin/user', ['bin/user/other.py'])]")
+    changes = install.EcowittHttpInstaller.remove_legacy_extension(engine)
+    assert not (ext / 'EcowittGateway').exists() and not (user / 'weewx-EcowittGateway.py').exists()
+    assert (ext / 'SomethingElse').exists() and (ext / 'weewx-ecowittGateway' / 'install.py').exists()
+    assert (user / 'weewx-ecowittGateway.py').read_text() == 'new driver'
+    assert len(changes) == 1 and 'installed as EcowittGateway' in changes[0]
+
+
+def test_old_driver_file_without_its_record_is_removed(tmp_path):
+    engine, user, ext = make_roots(tmp_path, 'copy', 'copy')
+    import shutil
+    shutil.rmtree(ext / 'weewx-EcowittGateway')
+    (user / '__pycache__').mkdir()
+    (user / '__pycache__' / 'weewx-EcowittGateway.cpython-311.pyc').write_text('')
+    changes = install.EcowittHttpInstaller.remove_legacy_extension(engine)
+    assert not (user / 'weewx-EcowittGateway.py').exists()
+    assert not (user / '__pycache__' / 'weewx-EcowittGateway.cpython-311.pyc').exists()
+    assert (user / 'weewx-ecowittGateway.py').read_text() == 'new driver'
+    assert changes == ['removed weewx-EcowittGateway.py, left by the weewx-EcowittGateway extension '
+                       '(now weewx-ecowittGateway)']
+    assert install.EcowittHttpInstaller.remove_legacy_extension(engine) == []

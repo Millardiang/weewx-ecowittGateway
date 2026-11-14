@@ -1,12 +1,12 @@
 {
 "cli": {
 "--active-map": {
-"digest": "8513cef21f6c9749",
-"lines": 82
+"digest": "5ce5fb29e40ccb84",
+"lines": 91
 },
 "--active-map --no-sensor-map": {
-"digest": "8513cef21f6c9749",
-"lines": 82
+"digest": "5ce5fb29e40ccb84",
+"lines": 91
 },
 "--active-map [down]": {
 "digest": "e9b12324ec993554",
@@ -21,20 +21,20 @@
 "lines": 9
 },
 "--default-map": {
-"digest": "bc81be19138a6ba2",
-"lines": 302
+"digest": "1c05805b7c7f1406",
+"lines": 312
 },
 "--default-map [down]": {
-"digest": "bc81be19138a6ba2",
-"lines": 302
+"digest": "1c05805b7c7f1406",
+"lines": 312
 },
 "--default-map [null]": {
-"digest": "bc81be19138a6ba2",
-"lines": 302
+"digest": "1c05805b7c7f1406",
+"lines": 312
 },
 "--default-map [sparse]": {
-"digest": "bc81be19138a6ba2",
-"lines": 302
+"digest": "1c05805b7c7f1406",
+"lines": 312
 },
 "--driver-map": {
 "digest": "2f8aa7319e4ac001",
@@ -213,19 +213,19 @@
 "lines": 5
 },
 "--live-data": {
-"digest": "1daecf8091073765",
+"digest": "dc693d13dbc607a6",
 "lines": 7
 },
 "--live-data --show-all-batt": {
-"digest": "1daecf8091073765",
+"digest": "dc693d13dbc607a6",
 "lines": 7
 },
 "--live-data --units metricwx": {
-"digest": "1daecf8091073765",
+"digest": "dc693d13dbc607a6",
 "lines": 7
 },
 "--live-data --units us": {
-"digest": "ce1c3275ade65319",
+"digest": "98c253c8651db3df",
 "lines": 7
 },
 "--live-data [down]": {
@@ -313,20 +313,20 @@
 "lines": 4
 },
 "--service-map": {
-"digest": "0a4b2347c9c0f15b",
-"lines": 304
+"digest": "5b86e3c22263ac4b",
+"lines": 314
 },
 "--service-map [down]": {
-"digest": "0a4b2347c9c0f15b",
-"lines": 304
+"digest": "5b86e3c22263ac4b",
+"lines": 314
 },
 "--service-map [null]": {
-"digest": "0a4b2347c9c0f15b",
-"lines": 304
+"digest": "5b86e3c22263ac4b",
+"lines": 314
 },
 "--service-map [sparse]": {
-"digest": "0a4b2347c9c0f15b",
-"lines": 304
+"digest": "5b86e3c22263ac4b",
+"lines": 314
 },
 "--sources": {
 "digest": "c48af96505dae87d",
@@ -365,24 +365,24 @@
 "lines": 5
 },
 "--version": {
-"digest": "cfe8996456f94538",
+"digest": "83a5373ec53e608e",
 "lines": 1
 },
 "--version [down]": {
-"digest": "cfe8996456f94538",
+"digest": "83a5373ec53e608e",
 "lines": 1
 },
 "--version [null]": {
-"digest": "cfe8996456f94538",
+"digest": "83a5373ec53e608e",
 "lines": 1
 },
 "--version [sparse]": {
-"digest": "cfe8996456f94538",
+"digest": "83a5373ec53e608e",
 "lines": 1
 },
 "--weewx-fields": {
-"digest": "85646af2bb1dc0ba",
-"lines": 75
+"digest": "a3d29a042294326b",
+"lines": 85
 },
 "--weewx-fields [down]": {
 "digest": "a5a3c0b0509a02b0",

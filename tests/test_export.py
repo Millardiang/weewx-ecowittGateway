@@ -87,3 +87,10 @@ def test_export_service_writes_json_and_publishes(egw, tmp_path):
         assert topics['weather/test/outTemp_C'] == '20.0'
     finally:
         broker.close()
+
+
+def test_loop_json_writer_makes_the_folder(egw, tmp_path):
+    """On a new station the web pages folder is only made by the first report."""
+    writer = egw.LoopJsonWriter({'enable': 'True'}, html_dir=str(tmp_path / 'public_html'))
+    writer.write(PACKET)
+    assert os.path.exists(writer.path)

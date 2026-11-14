@@ -116,11 +116,12 @@ def test_tidy_accumulator(egw):
     removed, changed = egw.tidy_accumulator(conf)
     accum = conf['Accumulator']
     # earlier extensions' entries for fields this driver doesn't produce, as they were added
-    assert sorted(removed) == ['heap_free', 'model', 'pm2_51_24hav', 'soilMoistBatt3s', 'wh31_ch1_batt']
+    # (heap_free and model are fields the driver produces now, so their entries stay)
+    assert sorted(removed) == ['pm2_51_24hav', 'soilMoistBatt3s', 'wh31_ch1_batt']
     # kept: a field in the user's field map, an entry the user changed, fields the driver produces
     # (whatever their extractor), and entries no version added
     for field in ('hourRain', 'dayRain', 'wh41_ch1_batt', 'wh69_batt', 'rainRate', 'myOwnField',
-                  'lightning_strike_count'):
+                  'lightning_strike_count', 'heap_free', 'model'):
         assert field in accum, field
     assert accum['dayRain']['extractor'] == 'max'
     assert changed == ['lightningcount'] and accum['lightningcount']['extractor'] == 'last'
@@ -133,7 +134,7 @@ def test_reconfigure_tidies_the_accumulator(egw, capsys):
     accum = conf['Accumulator']
     assert 'pm2_51_24hav' not in accum and accum['lightningcount']['extractor'] == 'last'
     assert accum['wh40_batt']['extractor'] == 'last'           # the driver's own entries added
-    assert 'Removed 5 unused [Accumulator] entries' in capsys.readouterr().out
+    assert 'Removed 3 unused [Accumulator] entries' in capsys.readouterr().out
 
 
 def test_install_over_an_earlier_extension_tidies_the_accumulator(monkeypatch, gateway):
@@ -307,8 +308,15 @@ def test_fixture_has_the_paired_sensors_these_tests_use():
 # ------------------------------------------------------------------ radiation
 
 
-def test_radiation_from_illuminance_is_opt_in(source):
-    assert 'radiation' not in source.mapped({'common_list.0x15.val': 12670.0})
+def test_radiation_from_illuminance_is_on_by_default(egw, source, station):
+    """The gateway shows the light sensor as solar radiation (W/m2) or illuminance (lux); both
+    are recorded unless radiation_from_illuminance = False."""
+    assert source.mapped({'common_list.0x15.val': 12670.0})['radiation'] == pytest.approx(100.0)
+    src = egw.GatewaySource('gateway', dict(station, radiation_from_illuminance='False'))
+    try:
+        assert 'radiation' not in src.mapped({'common_list.0x15.val': 12670.0})
+    finally:
+        src.stop()
 
 
 def test_radiation_from_illuminance(egw, station):
@@ -340,17 +348,18 @@ def test_radiation_limits_and_mapping(egw, station):
         src.stop()
 
 
-def test_installer_offers_radiation_over_an_earlier_extension(monkeypatch, gateway):
-    """Yes by default over the earlier weewx-EcowittGateway extension (its settings have rain_source),
-    which recorded radiation."""
+def test_installer_records_radiation_without_asking(monkeypatch, gateway):
+    """Radiation is on unless the setting (kept on a re-install) or ECOWITT_RADIATION says otherwise;
+    the installer doesn't ask."""
     env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver')
-    conf, _ = run(WEEWX_CONF + "[EcowittGateway]\n    rain_source = tipping\n")
+    conf, lines = run()
     assert conf['EcowittGateway']['radiation_from_illuminance'] == 'True'
+    assert not any('radiation' in line.lower() and '?' in line for line in lines)
+    conf, _ = run(WEEWX_CONF + "[EcowittGateway]\n    radiation_from_illuminance = False\n")
+    assert conf['EcowittGateway']['radiation_from_illuminance'] == 'False'
+    env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver', RADIATION='no')
     conf, _ = run()
     assert conf['EcowittGateway']['radiation_from_illuminance'] == 'False'
-    env(monkeypatch, IP_ADDRESS=gateway.address, MODE='driver', RADIATION='yes')
-    conf, _ = run()
-    assert conf['EcowittGateway']['radiation_from_illuminance'] == 'True'
 
 
 @pytest.mark.parametrize('debug', [1, 2])

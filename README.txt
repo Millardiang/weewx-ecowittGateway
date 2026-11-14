@@ -1,7 +1,7 @@
 WEEWX-ECOWITTGATEWAY
 ====================
 
-Version: 2.1.1 · WeeWX driver and service for Ecowitt gateways and consoles (local HTTP API, or the
+Version: 2.1.2 · WeeWX driver and service for Ecowitt gateways and consoles (local HTTP API, or the
 TCP API for the GW1000)
 
 weewx-ecowittGateway is built on Gary Roderick's Ecowitt local HTTP API driver (ecowitt_http.py
@@ -77,18 +77,18 @@ Installation as a WeeWX driver
 
     For WeeWX package installs:
 
-        weectl extension install weewx-ecowittGateway-2.1.1.zip
+        weectl extension install weewx-ecowittGateway-2.1.2.zip
 
     For WeeWX pip installs the Python virtual environment must be activated before the extension is
     installed:
 
-        source ~/weewx-venv/bin/activate weectl extension install weewx-ecowittGateway-2.1.1.zip
+        source ~/weewx-venv/bin/activate weectl extension install weewx-ecowittGateway-2.1.2.zip
 
     For WeeWX installs from git the Python virtual environment must be activated before the
     extension is installed:
 
         source ~/weewx-venv/bin/activate python3 ~/weewx/src/weectl.py extension install
-        weewx-ecowittGateway-2.1.1.zip
+        weewx-ecowittGateway-2.1.2.zip
 
     The installer asks for the device IP address (and checks it), whether to use the device as the
     station driver or as a service, which rain gauge WeeWX rain comes from, and the optional
@@ -271,6 +271,15 @@ If [StdWXCalculate] [[Delta]] [[[rain]]] names a total the driver doesn't produc
 default, when there is no such rule, is totalRain), rain stays empty, and the driver logs a warning
 when WeeWX starts.
 
+Keep the [[Delta]] rules. The installer writes them:
+
+    [StdWXCalculate] [[Delta]] [[[rain]]] input = t_rainyear       # or p_rainyear for a piezo gauge
+    [[[p_rain]]] input = p_rainyear [[[lightning_strike_count]]] input = lightningcount
+
+This driver doesn't send rain itself, so they don't count rain twice: rain comes only from the
+[[[rain]]] rule. Without that rule rain is empty, and with it removed WeeWX looks for totalRain
+instead. (A driver that sends its own rain needs no [[[rain]]] rule.)
+
 Sensor map
 ----------
 
@@ -393,15 +402,16 @@ over an archive interval is then the fraction of the time the gateway was online
 Radiation
 ---------
 
-Ecowitt's light sensors measure illuminance, which the driver records in illuminance (lux). With
+The gateway shows its light sensor's reading as solar radiation (W/m²) or as illuminance (lux, or
+foot-candles), as set in the WS View Plus app; the two are the same reading converted with Ecowitt's
+factor (126.7 lux per W/m²). The driver records it both ways, whatever the gateway is set to:
+WeeWX's radiation (W/m²), which standard skins show and WeeWX needs to work out evapotranspiration
+(ET), and illuminance (lux). weectl device --live-data shows both. To record only illuminance:
 
-    [EcowittGateway] radiation_from_illuminance = True
+    [EcowittGateway] radiation_from_illuminance = False
 
-it also records WeeWX's radiation (W/m²), worked out with Ecowitt's own factor (126.7 lux per W/m²,
-the same conversion the gateway uses when set to show W/m²). Standard skins show radiation, and
-WeeWX needs it to work out evapotranspiration (ET). It is an approximation: the sensor is not a
-pyranometer. It applies to loop packets and catchup records, and [[limits]] can check it. It is off
-if radiation is mapped to a gateway field in your field map settings.
+It applies to loop packets and catchup records, and [[limits]] can check it. It is off if radiation
+is mapped to a gateway field in your field map settings.
 
 Fields, the database and [Accumulator]
 --------------------------------------
@@ -498,6 +508,13 @@ two fields are left out. weectl device --sensors shows each sensor's signal, rss
 and, where there is one, voltage:
 
     WH40       sensor ID: C79F           signal: 4 rssi: -56 battery: 5 (1.6V) (OK)
+
+Station fields. Each loop packet also has the gateway's firmware (stationtype, eg GW3000B_V1.2.5),
+its model (model, GW3000B), its Wi-Fi access point name (apName), the rain gains (gain0 for the
+tipping gauge, gain1–gain5 for the piezo gauge's five rain-rate bands) and its free memory
+(heap_free, bytes). All but heap_free are read every 10 minutes. stationtype, model and apName are
+text: WeeWX keeps their last value in an archive record (the driver's [Accumulator] entries,
+accumulator = firstlast), and they aren't stored in a database.
 
 PM2.5 and air-quality sensors:
 
@@ -677,7 +694,7 @@ Every installer question can be answered with an ECOWITT_* environment variable,
 be scripted (for example in a Vagrant or Ansible provisioner):
 
     sudo ECOWITT_NO_PROMPT=yes ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \ weectl
-    extension install --yes weewx-ecowittGateway-2.1.1.zip
+    extension install --yes weewx-ecowittGateway-2.1.2.zip
 
 Questions without a variable take their default (the existing setting where there is one), and the
 installer prints each answer and where it came from. A variable with a value the installer cannot
@@ -734,13 +751,13 @@ Install weewx-ecowittGateway over it as above, without uninstalling it first (un
 the [EcowittGateway] section). The installer:
 
 - points driver and the service lists at user.weewx-ecowittGateway and removes the old file
-  (bin/user/weewx-EcowittGateway.py) and extension record, so weectl extension list shows only
-  weewx-ecowittGateway;
+  (bin/user/weewx-EcowittGateway.py) and extension record, whatever name it was recorded under, so
+  weectl extension list shows only weewx-ecowittGateway;
 - keeps your settings: the Ecowitt.net API and application keys move into [[catchup]], and WeeWX's
   rule for rain is set from rain_source (both means tipping: the piezo gauge goes to p_rain);
 - removes the [Accumulator] entries for fields this driver doesn't produce (see [Fields, the
   database and [Accumulator]](#fields-the-database-and-accumulator));
-- offers to record radiation (see Radiation), with y as the default.
+- records radiation as well as illuminance (see Radiation) unless your settings say otherwise.
 
 The field names this driver records may differ from the columns your database has: weectl device
 --active-map lists them. To keep a column filling, map the gateway field to it in

@@ -3,6 +3,22 @@
 All notable changes to weewx-ecowittGateway are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.3] – 15 November 2026
+
+### Fixed
+
+- With the gateway out of reach while WeeWX started, memory grew until the process was killed, and
+  the gateway was polled more and more often (issue #11). Reading the gateway model for WeeWX's
+  station information failed, so WeeWX built the engine again without shutting the first one down,
+  and its collector thread went on polling into a queue nothing read; one more thread with each
+  retry. The collectors now start when WeeWX runs the engine (the driver's first catchup or loop
+  packet request; the service's STARTUP event), so a failed start leaves none behind; the model
+  (`hardware_name`) is read once and gives the driver name if the gateway doesn't answer; and the
+  collector queue holds at most 100 items, dropping the oldest.
+- `weectl device --live-data` showed the driver's own names (`wn31_ch1_batt`) instead of the
+  standard columns WeeWX records them in (`batteryStatus1`, `rainBatteryStatus` …), as
+  `weewx-ecowittGateway.py` run directly already did.
+
 ## [2.1.2] – 14 November 2026
 
 ### Fixed

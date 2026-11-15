@@ -233,3 +233,22 @@ def test_live_data_shows_radiation_and_the_station_fields(egw, http_config, caps
     out = run(egw, http_config, capsys, '--live-data')
     assert 'illuminance: 27291 lx' in out and 'radiation: 215 W/m²' in out
     assert 'stationtype: GW2000A_V3.1.4' in out and 'apName: GW2000A-WIFI1234' in out and 'gain0: 1' in out
+
+
+def test_weectl_live_data_uses_the_standard_column_names(egw, http_config, capsys, tmp_path):
+    """As WeeWX records them: batteryStatus1 (WN31 CH1), not wn31_ch1_batt; ecowitt_http.py's
+    --live-data and the earlier weectl device path used the driver's names."""
+    http_config['WEEWX_ROOT'] = str(tmp_path)
+    http_config['StdArchive'] = {'data_binding': 'wx_binding'}
+    http_config['DataBindings'] = {'wx_binding': {'database': 'archive_sqlite', 'table_name': 'archive',
+                                                  'manager': 'weewx.manager.DaySummaryManager',
+                                                  'schema': 'weewx.schemas.wview_extended.schema'}}
+    http_config['Databases'] = {'archive_sqlite': {'database_name': 'weewx.sdb', 'database_type': 'SQLite'}}
+    http_config['DatabaseTypes'] = {'SQLite': {'driver': 'weedb.sqlite', 'SQLITE_ROOT': str(tmp_path)}}
+    saved = egw.FieldMapper.station_columns, egw.FieldMapper.conventional_names
+    try:
+        out = run(egw, http_config, capsys, '--live-data')
+    finally:
+        egw.FieldMapper.station_columns, egw.FieldMapper.conventional_names = saved
+    assert 'batteryStatus1: 0' in out and 'signal1: 4' in out and 'wn31_ch1_batt' not in out
+    assert 'rainBatteryStatus: 0' in out and 'wh40_batt: 4' in out

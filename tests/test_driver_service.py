@@ -118,11 +118,16 @@ def test_loader_reads_the_legacy_section(egw, station):
 
 
 class FakeEngine:
+    """The parts of the engine a service uses. WeeWX sends STARTUP when it runs the engine, after
+    building it; here that is as soon as a service binds it."""
+
     def __init__(self):
         self.bound = {}
 
     def bind(self, event, callback):
         self.bound[event] = callback
+        if event == weewx.STARTUP:
+            callback(None)
 
 
 @pytest.fixture

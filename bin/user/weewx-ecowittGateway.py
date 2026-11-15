@@ -26,9 +26,13 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 2.1.2
+Version: 2.1.3
 
 Revision History
+    2.1.3 (15 November 2026)
+        - collectors start when WeeWX runs the engine; hardware_name can't
+          raise; bounded collector queue (issue #11)
+        - weectl device --live-data uses the standard column names
     2.1.2 (14 November 2026)
         - radiation by default, as well as illuminance; shown by --live-data
         - heap_free, stationtype, model, apName, gain0-gain5 loop fields
@@ -182,7 +186,7 @@ log = logging.getLogger(__name__)
 
 
 DRIVER_NAME = 'EcowittGateway'
-DRIVER_VERSION = '2.1.2'
+DRIVER_VERSION = '2.1.3'
 # config section used by ecowitt_http.py; read if there is no [EcowittGateway]
 LEGACY_DRIVER_NAME = 'EcowittHttp'
 # this module, as WeeWX loads it
@@ -3711,9 +3715,22 @@ class EcowittCommon:
         online = int(any(fields.values()))
         return {'gateway_online': online, **fields} if self.multi else {'gateway_online': online}
 
+    def start_sources(self):
+        """Start polling every gateway (each collector runs in its own thread),
+        once. Called when WeeWX runs the engine, not while it builds it: if
+        building the engine fails (a gateway that doesn't answer, another
+        service's error), WeeWX builds a new one without shutting the failed
+        one down, so collectors started then would poll on, unstopped."""
+
+        if not getattr(self, '_sources_started', False):
+            self._sources_started = True
+            for source in self.sources:
+                source.start()
+
     def stop_sources(self):
         """Stop polling every gateway."""
 
+        self._sources_started = False
         for source in self.sources:
             source.stop()
 
@@ -3822,10 +3839,12 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
         self.log_failures = True
         self.lost_con_ts = None
         self.latest_sensor_data = None
-        # start polling the device(s) (each collector runs in its own thread)
-        for source in self.sources:
-            source.start()
+        # poll the device(s) once WeeWX runs the engine (see start_sources())
+        self.bind(weewx.STARTUP, self.startup)
         self.bind(weewx.NEW_LOOP_PACKET, self.new_loop_packet)
+
+    def startup(self, event):
+        self.start_sources()
 
     def new_loop_packet(self, event):
         """Augment a loop packet with device data.
@@ -3841,6 +3860,8 @@ class EcowittHttpService(weewx.engine.StdService, EcowittCommon):
         processed as well.
         """
 
+        # in case STARTUP wasn't seen (it starts them)
+        self.start_sources()
         # several gateways: their data is merged
         if self.multi:
             self.new_loop_packet_merged(event)
@@ -5040,6 +5061,9 @@ class EcowittHttpDriverConfigurator(weewx.drivers.AbstractConfigurator):
         weeutil.logger.setup('weewx', config_dict)
 
         define_units()
+        # the standard column names (batteryStatus1, rainBatteryStatus ...)
+        # and conventional names the driver uses with this weewx.conf
+        use_station_columns(config_dict)
 
         try:
             direct_http_gw = DirectEcowittDevice(options, parser, stn_dict,
@@ -6252,9 +6276,9 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
         if self.multi:
             log.info('EcowittHttpDriver: when no gateway answers: gap_mode = %s (max_gap_wait %d s, '
                      'min_restart_interval %d s)', self.gap_mode, self.max_gap_wait, self.min_restart_interval)
-        # start polling the device(s) (each collector runs in its own thread)
-        for source in self.sources:
-            source.start()
+        # the device(s) are polled once WeeWX runs the engine: the first
+        # genStartupRecords() or genLoopPackets() call (see start_sources())
+        self._hardware_name = None
 
     def genLoopPackets(self):
         """Generator function that returns loop packets.
@@ -6266,6 +6290,7 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
         signal we need to close.
         """
 
+        self.start_sources()
         # several gateways: merged loop packets
         if self.multi:
             yield from self.gen_merged_loop_packets()
@@ -6350,6 +6375,7 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
         last_ts.
         """
 
+        self.start_sources()
         return self.genArchiveRecords(last_ts)
 
     def genArchiveRecords(self, lastgood_ts):
@@ -6460,9 +6486,18 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
         this is None use the driver name.
         """
 
-        if self.source.model is not None:
-            return self.source.model
-        return DRIVER_NAME
+        # WeeWX reads this while building the engine: it must not raise (see
+        # start_sources()); a gateway that doesn't answer gives the driver name
+        if getattr(self, '_hardware_name', None) is None:
+            try:
+                model = self.source.model
+            except Exception as e:
+                log.info('EcowittHttpDriver: could not read the gateway model (%s)', e)
+                return DRIVER_NAME
+            if model is None:
+                return DRIVER_NAME
+            self._hardware_name = model
+        return self._hardware_name
 
     @property
     def mac_address(self):
@@ -6482,10 +6517,29 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
 # ============================================================================
 
 class Collector:
-    """Base class for a threaded client to pass data to a parent via a queue."""
+    """Base class for a threaded client to pass data to a parent via a queue.
+
+    The queue holds at most QUEUE_SIZE items: put() drops the oldest when it is
+    full, so a collector whose items aren't read (WeeWX busy, or stopped
+    without shutting the collector down) can't use up memory."""
+
+    QUEUE_SIZE = 100
 
     def __init__(self):
-        self.queue = queue.Queue()
+        self.queue = queue.Queue(maxsize=self.QUEUE_SIZE)
+
+    def put(self, item):
+        """Queue item, dropping the oldest item if the queue is full."""
+
+        while True:
+            try:
+                self.queue.put_nowait(item)
+                return
+            except queue.Full:
+                try:
+                    self.queue.get_nowait()
+                except queue.Empty:
+                    pass
 
     def startup(self):
         pass
@@ -6636,7 +6690,7 @@ class EcowittHttpCollector(Collector):
                     else:
                         log.info('Collected data: %s', queue_data)
                 # put the queue data in the queue
-                self.queue.put(queue_data)
+                self.put(queue_data)
                 # debug log when we will next poll the API ('log_next_update =
                 # False' keeps debug logging without this line every poll)
                 if self.debug.collector or (weewx.debug and self.log_next_update):
@@ -8910,11 +8964,14 @@ class EcowittDevice:
 
     @property
     def model(self):
-        """Device model."""
+        """Device model, read once (raises DeviceIOError if the device doesn't
+        answer)."""
 
-        version_data = self.api.get_version()
-        version = self.parser.parse_get_version(version_data).get('version')
-        return self.parser.get_model_from_firmware(version)
+        if getattr(self, '_model', None) is None:
+            version_data = self.api.get_version()
+            version = self.parser.parse_get_version(version_data).get('version')
+            self._model = self.parser.get_model_from_firmware(version)
+        return self._model
 
     @property
     def mac_address(self):

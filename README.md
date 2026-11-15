@@ -1,6 +1,6 @@
 # weewx-ecowittGateway
 
-**Version:** 2.1.3 · WeeWX driver and service for Ecowitt gateways and consoles
+**Version:** 2.1.4 · WeeWX driver and service for Ecowitt gateways and consoles
 (local HTTP API, or the TCP API for the GW1000)
 
 weewx-ecowittGateway is built on Gary Roderick's Ecowitt local HTTP API driver (`ecowitt_http.py`
@@ -50,17 +50,17 @@ Vagrant or Ansible. The summary follows.
 
     For WeeWX package installs:
 
-        weectl extension install weewx-ecowittGateway-2.1.3.zip
+        weectl extension install weewx-ecowittGateway-2.1.4.zip
 
     For WeeWX *pip* installs the Python virtual environment must be activated before the extension is installed:
 
         source ~/weewx-venv/bin/activate
-        weectl extension install weewx-ecowittGateway-2.1.3.zip
+        weectl extension install weewx-ecowittGateway-2.1.4.zip
 
     For WeeWX installs from *git* the Python virtual environment must be activated before the extension is installed:
 
         source ~/weewx-venv/bin/activate
-        python3 ~/weewx/src/weectl.py extension install weewx-ecowittGateway-2.1.3.zip
+        python3 ~/weewx/src/weectl.py extension install weewx-ecowittGateway-2.1.4.zip
 
     The installer asks for the device IP address (and checks it), whether to use the device as the
     station driver or as a service, which rain gauge WeeWX `rain` comes from, and the optional
@@ -409,10 +409,15 @@ filled from the driver fields with the same purpose, so they work without any sk
 The `*BatteryStatus` columns are WeeWX's 0 (OK) or 1 (low). The WH40, WS80/85/90 and WH68 report a
 level instead (0–5, where 0 or 1 is low, 6 on DC power), so their column gets the status and the
 level stays in the driver's field (`wh40_batt` …); the other fields are renamed to the column. A
-column is used only if it is in the station's database and no field map setting names it, and the
-driver field isn't named in a field map setting. The columns used are logged at startup and listed
-by `weectl device --active-map`. Set `[[additions]] use_station_columns = False` to keep the driver's
-names (this works with or without the additions database).
+column is used only if it is in the station's database and no field map setting maps it to
+something else, and the driver field isn't mapped differently from the default in a field map
+setting (a setting the same as the default map, as an earlier version's full `[[field_map]]` has,
+doesn't count). A driver field that has a column of its own in the station's database (an earlier
+version may have added `wn31_ch1_batt`) is kept and copied to the standard column, so both fill. The
+columns used are logged at startup; `weectl device --active-map` lists them and says why any are
+not used, and `weectl device --live-data` says why when it shows a reading under the driver's name.
+Set `[[additions]] use_station_columns = False` to keep the driver's names (this works with or
+without the additions database).
 
 **Conventional names in other databases.** Some extensions keep their own database for fields WeeWX
 has no column for, and name the columns as other drivers do. DivumWX's `divumwx_extras.sdb`, for
@@ -453,15 +458,18 @@ sensors: `wh40_batt`, `ws90_sig`, `wn31_ch2_batt`, `wh51_ch3_sig`, and `_volt` f
 uses). The WH68's and WS80's battery voltages (`wh68_volt`, `ws80_volt`) come from the gateway's TCP
 API (port 45000), which GW2000 and GW3000 gateways answer as well as the HTTP API; the HTTP API gives
 only a level (0–5) for them. They are read every 5 minutes; if the TCP API doesn't answer, the log
-says so once and those two fields are left out. `weectl device --sensors` shows each sensor's signal,
-rssi (dBm), battery and, where there is one, voltage:
+says so once and those two fields are left out. Each sensor's received signal strength is in
+`<sensor>_rssi` (dBm, eg `wh40_rssi`, `wn31_ch1_rssi`), beside its signal (0–4) in `<sensor>_sig`.
+`weectl device --sensors` shows each sensor's signal, rssi, battery and, where there is one,
+voltage:
 
     WH40       sensor ID: C79F           signal: 4 rssi: -56 battery: 5 (1.6V) (OK)
 
 **Station fields.** Each loop packet also has the gateway's firmware (`stationtype`, eg
 `GW3000B_V1.2.5`), its model (`model`, `GW3000B`), its Wi-Fi access point name (`apName`), the rain
-gains (`gain0` for the tipping gauge, `gain1`–`gain5` for the piezo gauge's five rain-rate bands) and
-its free memory (`heap_free`, bytes). All but `heap_free` are read every 10 minutes. `stationtype`,
+gains (`gain0` for the tipping gauge, `gain1`–`gain5` for the piezo gauge's five rain-rate bands),
+its free memory (`heap_free`, bytes) and how long it has been running (`runtime`, seconds). All but
+`heap_free` and `runtime` are read every 10 minutes. `stationtype`,
 `model` and `apName` are text: WeeWX keeps their last value in an archive record (the driver's
 `[Accumulator]` entries, `accumulator = firstlast`), and they aren't stored in a database.
 
@@ -617,7 +625,7 @@ Every installer question can be answered with an `ECOWITT_*` environment variabl
 be scripted (for example in a Vagrant or Ansible provisioner):
 
     sudo ECOWITT_NO_PROMPT=yes ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \
-        weectl extension install --yes weewx-ecowittGateway-2.1.3.zip
+        weectl extension install --yes weewx-ecowittGateway-2.1.4.zip
 
 Questions without a variable take their default (the existing setting where there is one), and the
 installer prints each answer and where it came from. A variable with a value the installer cannot

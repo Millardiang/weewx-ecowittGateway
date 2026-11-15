@@ -39,6 +39,7 @@ def test_loop_packet_fields(egw, station, gateway):
     assert packet['apName'] == 'GW2000A-WIFI1234'
     assert packet['gain0'] == 1.0 and packet['gain4'] == 1.4
     assert packet['heap_free'] == 61268
+    assert packet['runtime'] == 4338823 and egw.accumulator_extractors()['runtime'] == 'last'
     # radiation (W/m2) as well as illuminance (lux), by default
     groups = weewx.units.std_groups[packet['usUnits']]
     light = weewx.units.ValueTuple(packet['illuminance'], groups['group_illuminance'], 'group_illuminance')

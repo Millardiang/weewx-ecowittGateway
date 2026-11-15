@@ -13,7 +13,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 Built on the installer for Gary Roderick's Ecowitt Local HTTP API driver
 (ecowitt_http.py 0.1.0a28).
 
-Version: 2.1.3
+Version: 2.1.4
 
 The installer asks for the gateway settings and writes them to weewx.conf,
 with the [EcowittGateway] section placed directly after [Station]. Without a
@@ -28,6 +28,8 @@ scripted:
 ECOWITT_NO_PROMPT=yes stops the installer asking anything, even at a terminal.
 
 Revision History
+    2.1.4 (15 November 2026)
+        -   [Accumulator] entries for the <sensor>_rssi fields and runtime
     2.1.3 (15 November 2026)
         -   no installer changes
     2.1.2 (14 November 2026)
@@ -70,7 +72,7 @@ import weewx
 
 
 REQUIRED_WEEWX_VERSION = "5.0.0"
-DRIVER_VERSION = "2.1.3"
+DRIVER_VERSION = "2.1.4"
 SECTION = 'EcowittGateway'
 # ecowitt_http.py's section and service, moved to the names above
 LEGACY_SECTION = 'EcowittHttp'
@@ -234,6 +236,8 @@ ecowitt_config = """
     [[lightningdettime]]
         extractor = last
     [[lightningcount]]
+        extractor = last
+    [[runtime]]
         extractor = last
     [[stationtype]]
         accumulator = firstlast
@@ -574,13 +578,141 @@ ecowitt_config = """
         extractor = last
     [[wh51_ch16_sig]]
         extractor = last
+    [[wh25_rssi]]
+        extractor = last
+    [[wh26_rssi]]
+        extractor = last
+    [[wn31_ch1_rssi]]
+        extractor = last
+    [[wn31_ch2_rssi]]
+        extractor = last
+    [[wn31_ch3_rssi]]
+        extractor = last
+    [[wn31_ch4_rssi]]
+        extractor = last
+    [[wn31_ch5_rssi]]
+        extractor = last
+    [[wn31_ch6_rssi]]
+        extractor = last
+    [[wn31_ch7_rssi]]
+        extractor = last
+    [[wn31_ch8_rssi]]
+        extractor = last
+    [[wn34_ch1_rssi]]
+        extractor = last
+    [[wn34_ch2_rssi]]
+        extractor = last
+    [[wn34_ch3_rssi]]
+        extractor = last
+    [[wn34_ch4_rssi]]
+        extractor = last
+    [[wn34_ch5_rssi]]
+        extractor = last
+    [[wn34_ch6_rssi]]
+        extractor = last
+    [[wn34_ch7_rssi]]
+        extractor = last
+    [[wn34_ch8_rssi]]
+        extractor = last
+    [[wh41_ch1_rssi]]
+        extractor = last
+    [[wh41_ch2_rssi]]
+        extractor = last
+    [[wh41_ch3_rssi]]
+        extractor = last
+    [[wh41_ch4_rssi]]
+        extractor = last
+    [[wh51_ch1_rssi]]
+        extractor = last
+    [[wh51_ch2_rssi]]
+        extractor = last
+    [[wh51_ch3_rssi]]
+        extractor = last
+    [[wh51_ch4_rssi]]
+        extractor = last
+    [[wh51_ch5_rssi]]
+        extractor = last
+    [[wh51_ch6_rssi]]
+        extractor = last
+    [[wh51_ch7_rssi]]
+        extractor = last
+    [[wh51_ch8_rssi]]
+        extractor = last
+    [[wh54_ch1_rssi]]
+        extractor = last
+    [[wh54_ch2_rssi]]
+        extractor = last
+    [[wh54_ch3_rssi]]
+        extractor = last
+    [[wh54_ch4_rssi]]
+        extractor = last
+    [[wh55_ch1_rssi]]
+        extractor = last
+    [[wh55_ch2_rssi]]
+        extractor = last
+    [[wh55_ch3_rssi]]
+        extractor = last
+    [[wh55_ch4_rssi]]
+        extractor = last
+    [[wh57_rssi]]
+        extractor = last
+    [[ws90_rssi]]
+        extractor = last
+    [[wh40_rssi]]
+        extractor = last
+    [[wh45_rssi]]
+        extractor = last
+    [[wh68_rssi]]
+        extractor = last
+    [[wh69_rssi]]
+        extractor = last
+    [[ws80_rssi]]
+        extractor = last
+    [[ws85_rssi]]
+        extractor = last
+    [[wn35_ch1_rssi]]
+        extractor = last
+    [[wn35_ch2_rssi]]
+        extractor = last
+    [[wn35_ch3_rssi]]
+        extractor = last
+    [[wn35_ch4_rssi]]
+        extractor = last
+    [[wn35_ch5_rssi]]
+        extractor = last
+    [[wn35_ch6_rssi]]
+        extractor = last
+    [[wn35_ch7_rssi]]
+        extractor = last
+    [[wn35_ch8_rssi]]
+        extractor = last
+    [[wh51_ch9_rssi]]
+        extractor = last
+    [[wh51_ch10_rssi]]
+        extractor = last
+    [[wh51_ch11_rssi]]
+        extractor = last
+    [[wh51_ch12_rssi]]
+        extractor = last
+    [[wh51_ch13_rssi]]
+        extractor = last
+    [[wh51_ch14_rssi]]
+        extractor = last
+    [[wh51_ch15_rssi]]
+        extractor = last
+    [[wh51_ch16_rssi]]
+        extractor = last
     [[wn32_batt]]
         extractor = last
     [[wn32_sig]]
         extractor = last
+    [[wn32_rssi]]
+        extractor = last
     [[wn32p_batt]]
         extractor = last
     [[wn32p_sig]]
+        extractor = last
+    [[wn32p_rssi]]
         extractor = last
     [[inTempBatteryStatus]]
         extractor = last

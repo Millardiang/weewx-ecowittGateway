@@ -180,18 +180,50 @@ def test_station_column_map_with_or_without_the_additions_database(egw, tmp_path
 def test_station_column_map_leaves_columns_and_fields_the_user_mapped(egw, tmp_path):
     conf = config(tmp_path)
     conf['EcowittGateway']['field_map_extensions'] = {'batteryStatus1': 'wh57.battery',
-                                                      'wn31_ch2_batt': 'wn31.ch2.battery'}
-    found = egw.station_column_map(conf)
-    assert 'batteryStatus1' not in found
-    assert 'batteryStatus2' not in found
+                                                      'wn31_ch2_batt': 'wn31.ch5.battery',
+                                                      'wn31_ch3_batt': 'wn31.ch3.battery'}
+    found, _, unused = egw.station_column_choice(conf)
+    assert 'batteryStatus1' not in found and 'batteryStatus2' not in found
+    assert unused['batteryStatus1'] == 'a field map setting maps batteryStatus1 to wh57.battery'
+    assert unused['batteryStatus2'] == 'wn31_ch2_batt is mapped differently in the field map settings'
+    # the same as the default map, as an earlier version's full [[field_map]] has: not a choice
+    assert found['batteryStatus3'] == ('wn31_ch3_batt',)
 
 
-def test_station_column_map_leaves_fields_the_database_has(egw, tmp_path):
+def test_a_full_default_field_map_does_not_stop_the_station_columns(egw, tmp_path):
+    """Paul's case: a [[field_map]] that repeats the default map."""
     conf = config(tmp_path)
-    found = egw.station_column_map(conf, columns=egw.station_columns(conf) | {'wh25_batt'})
-    assert found['inTempBatteryStatus'] == ('wn32_batt',)
-    found = egw.station_column_map(conf, columns=egw.station_columns(conf) - {'signal4'})
-    assert 'signal4' not in found
+    conf['EcowittGateway']['field_map'] = dict(egw.HttpMapper.default_map)
+    found = egw.station_column_map(conf)
+    assert found['batteryStatus1'] == ('wn31_ch1_batt',) and found['signal7'] == ('wn31_ch7_sig',)
+
+
+def test_fields_the_database_has_are_kept_and_copied(columns_map, tmp_path):
+    """An earlier version may have added wn31_ch1_batt (and the like) to the station database: it
+    keeps filling, and the standard column fills too."""
+    egw = columns_map
+    conf = config(tmp_path)
+    found, kept, _ = egw.station_column_choice(conf, columns=egw.station_columns(conf) | {'wh25_batt',
+                                                                                        'wn31_ch1_batt'})
+    assert found['inTempBatteryStatus'] == ('wh25_batt', 'wn32_batt') and kept == {'wh25_batt', 'wn31_ch1_batt'}
+    egw.FieldMapper.station_columns, egw.FieldMapper.station_kept = found, kept
+    try:
+        mapper = egw.HttpMapper(driver_debug=egw.DebugOptions(), quiet=True)
+        data = mapper.map_data({'wn31.ch1.battery': 0, 'wn31.ch2.battery': 1})
+        assert data == {'wn31_ch1_batt': 0, 'batteryStatus1': 0, 'batteryStatus2': 1}
+    finally:
+        egw.FieldMapper.station_kept = set()
+    found, _, unused = egw.station_column_choice(conf, columns=egw.station_columns(conf) - {'signal4'})
+    assert 'signal4' not in found and unused['signal4'] == 'the station database has no signal4 column'
+
+
+def test_why_columns_are_not_used(egw, tmp_path):
+    conf = config(tmp_path)
+    conf['EcowittGateway']['additions']['use_station_columns'] = 'False'
+    assert egw.station_column_choice(conf)[2]['batteryStatus1'] == '[[additions]] use_station_columns is False'
+    del conf['DataBindings']
+    del conf['EcowittGateway']['additions']['use_station_columns']
+    assert 'could not be read' in egw.station_column_choice(conf)[2]['batteryStatus1']
 
 
 def test_mapped_data_uses_the_station_columns(columns_map, tmp_path):

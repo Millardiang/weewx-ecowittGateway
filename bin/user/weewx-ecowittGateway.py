@@ -26,9 +26,14 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 2.1.3
+Version: 2.1.4
 
 Revision History
+    2.1.4 (15 November 2026)
+        - standard columns used when the field map settings repeat the default
+          or the driver field has its own column (copied); why not, in
+          --active-map and --live-data
+        - <sensor>_rssi and runtime fields
     2.1.3 (15 November 2026)
         - collectors start when WeeWX runs the engine; hardware_name can't
           raise; bounded collector queue (issue #11)
@@ -186,7 +191,7 @@ log = logging.getLogger(__name__)
 
 
 DRIVER_NAME = 'EcowittGateway'
-DRIVER_VERSION = '2.1.3'
+DRIVER_VERSION = '2.1.4'
 # config section used by ecowitt_http.py; read if there is no [EcowittGateway]
 LEGACY_DRIVER_NAME = 'EcowittHttp'
 # this module, as WeeWX loads it
@@ -643,6 +648,9 @@ DEFAULT_GROUPS = {
     'ws85.signal': 'group_count',
     'ws90.signal': 'group_count'
 }
+# each sensor's rssi (dBm), beside its signal (0-4)
+DEFAULT_GROUPS.update({f'{key[:-len(".signal")]}.rssi': group for key, group in list(DEFAULT_GROUPS.items())
+                       if key.endswith('.signal')})
 
 
 # ============================================================================
@@ -922,6 +930,10 @@ class FieldMapper:
     """
 
     station_columns = {}
+    # driver fields with a column of their own: copied, not renamed
+    station_kept = set()
+    # {station column: why it isn't used}
+    station_unused = {}
     conventional_names = {}
 
     def __init__(self, driver_debug=None, default_map=None, **mapper_config):
@@ -969,7 +981,7 @@ class FieldMapper:
         # make sure the default map is an InvertibleMap object.
         default_map = InvertibleMap(def_map)
         if self.wn32_indoor:
-            for source in ('wh25.battery', 'wh25.signal'):
+            for source in ('wh25.battery', 'wh25.signal', 'wh25.rssi'):
                 # is the source field in the default map
                 if source in default_map.values():
                     # the source field is in the default map, obtain the
@@ -979,7 +991,7 @@ class FieldMapper:
                     new_dest_field = dest_field.replace('wh25', 'wn32')
                     default_map[new_dest_field] = source
         if self.wn32_outdoor:
-            for source in ('wh26.battery', 'wh26.signal'):
+            for source in ('wh26.battery', 'wh26.signal', 'wh26.rssi'):
                 # is the source field in the default map
                 if source in default_map.values():
                     # the source field is in the default map, obtain the
@@ -1059,6 +1071,8 @@ class FieldMapper:
                 if field in data:
                     if column in BATTERY_LEVEL_COLUMNS:
                         data[column] = battery_status(data[field])
+                    elif field in cls.station_kept:
+                        data[column] = data[field]
                     else:
                         data[column] = data.pop(field)
                     break
@@ -1153,6 +1167,7 @@ class HttpMapper(FieldMapper):
         'extraTemp15': 'ch_temp.7.temp',
         'extraTemp16': 'ch_temp.8.temp',
         'heap_free': 'debug.heap',
+        'runtime': 'debug.runtime',
         'stationtype': 'station.stationtype',
         'model': 'station.model',
         'apName': 'station.apName',
@@ -1424,6 +1439,11 @@ class HttpMapper(FieldMapper):
         'wh51_ch16_volt': 'ch_soil.16.voltage',
         'wh51_ch16_sig': 'wh51.ch16.signal'
     }
+    # each sensor's rssi (dBm) beside its signal: wh40_rssi, wn31_ch1_rssi ...
+    for _field, _source in list(default_sensor_state_map.items()):
+        if _source.endswith('.signal'):
+            default_sensor_state_map[_field[:-len('_sig')] + '_rssi'] = _source[:-len('.signal')] + '.rssi'
+    del _field, _source
     # construct the default map based on the modular maps
     default_map = (dict(default_obs_map))
     default_map.update(default_rain_map)
@@ -2311,22 +2331,23 @@ def station_columns(config_dict):
     neither can be read."""
 
     binding = (config_dict.get('StdArchive') or {}).get('data_binding', 'wx_binding')
+    columns = binding_columns(config_dict, binding)
+    if columns:
+        return columns
     try:
         manager_dict = weewx.manager.get_manager_dict_from_config(config_dict, binding)
     except Exception as e:
         log.debug('Could not read data binding %s: %s', binding, e)
         return None
-    try:
-        with weewx.manager.open_manager(manager_dict) as manager:
-            return set(manager.sqlkeys)
-    except Exception:
-        pass
     schema = manager_dict.get('schema')
     if isinstance(schema, str):
         try:
             schema = weeutil.weeutil.get_object(schema)
         except Exception:
             return None
+    if isinstance(schema, list) and schema and schema[0][0] == 'table':
+        # a new-style schema given as a section, which WeeWX makes a list of items
+        schema = dict(schema)
     table = schema.get('table') if isinstance(schema, dict) else schema
     try:
         return {column[0] for column in table}
@@ -2343,21 +2364,39 @@ def station_column_map(config_dict, columns=None):
     (A battery level keeps its field, so its column of its own doesn't stop
     the status going to the station column.)"""
 
+    return station_column_choice(config_dict, columns)[0]
+
+
+def station_column_choice(config_dict, columns=None):
+    """(station_column_map(), {driver field: kept}, {column not used: why}).
+
+    A driver field that has a column of its own in the station's database
+    (an earlier version added it) is kept, and copied to the station column."""
+
     conf = driver_config(config_dict).get('additions') or {}
+    unused = {}
     if not weeutil.weeutil.tobool(conf.get('use_station_columns', True)):
-        return {}
+        return {}, set(), {c: '[[additions]] use_station_columns is False' for c in STATION_COLUMNS}
     columns = station_columns(config_dict) if columns is None else columns
     if not columns:
-        return {}
-    configured = configured_fields(config_dict)
-    named = configured | set(HttpMapper.default_map)
-    result = {}
-    for column, fields in STATION_COLUMNS.items():
-        fields = tuple(f for f in fields if f not in configured
-                       and (f not in columns or column in BATTERY_LEVEL_COLUMNS))
-        if column in columns and column not in named and fields:
+        return {}, set(), {c: "the station database's columns could not be read ([StdArchive] data_binding)"
+                           for c in STATION_COLUMNS}
+    changed = changed_fields(config_dict)
+    named = changed | set(HttpMapper.default_map)
+    result, kept = {}, set()
+    for column, all_fields in STATION_COLUMNS.items():
+        fields = tuple(f for f in all_fields if f not in changed)
+        if column not in columns:
+            unused[column] = f'the station database has no {column} column'
+        elif column in named:
+            unused[column] = f'a field map setting maps {column} to {configured_mappings(config_dict).get(column)}'
+        elif not fields:
+            unused[column] = f"{' and '.join(all_fields)} {'is' if len(all_fields) == 1 else 'are'} mapped " \
+                             f"differently in the field map settings"
+        else:
             result[column] = fields
-    return result
+            kept |= {f for f in fields if f in columns}
+    return result, kept, unused
 
 
 # The conventional names other drivers (the Davis Vantage among them) and
@@ -2432,7 +2471,7 @@ def conventional_name_map(config_dict, columns=None, other_columns=None):
         for binding in other_bindings(config_dict):
             other_columns |= binding_columns(config_dict, binding) or set()
     known = set(columns) | set(other_columns)
-    named = configured_fields(config_dict) | set(HttpMapper.default_map)
+    named = changed_fields(config_dict) | set(HttpMapper.default_map)
     return {name: field for name, field in names.items()
             if name in known and name not in named and name != field}
 
@@ -2443,7 +2482,8 @@ def use_station_columns(config_dict, label=DRIVER_NAME):
     finds to their conventional names (with the driver field's unit group),
     and log them. Returns the station column map."""
 
-    FieldMapper.station_columns = station_column_map(config_dict)
+    FieldMapper.station_columns, FieldMapper.station_kept, FieldMapper.station_unused = \
+        station_column_choice(config_dict)
     if FieldMapper.station_columns:
         log.info('%s: using station database columns %s', label,
                  ', '.join(f"{c} ({' or '.join(f)})" for c, f in FieldMapper.station_columns.items()))
@@ -4099,15 +4139,16 @@ def _keeps_last_value(source):
     """True for a device field whose last value in an archive interval is the
     one to keep, not the average: battery and signal states, running rain
     totals, the lightning count, distance and time, the day's maximum wind,
-    the 10 minute average wind direction and 24 hour averages and AQIs."""
+    the 10 minute average wind direction, 24 hour averages and AQIs, and the
+    gateway's running time."""
 
-    if (source.endswith(('.battery', '.signal', '_24HAQI', '_24H')) or source.startswith(('lightning.', 'station.'))
+    if (source.endswith(('.battery', '.signal', '.rssi', '_24HAQI', '_24H')) or source.startswith(('lightning.', 'station.'))
             or source in ('rain.gain0',) or source.startswith('piezoRain.gain')):
         return True
     if source in HttpMapper.default_rain_map.values():
         # a rain rate is averaged
         return not source.endswith('.0x0E.val')
-    return source in ('common_list.0x19.val', 'common_list.0x6D.val')
+    return source in ('common_list.0x19.val', 'common_list.0x6D.val', 'debug.runtime')
 
 
 def accumulator_extractors():
@@ -4197,6 +4238,25 @@ EARLIER_ACCUMULATOR = {
                                                         ('wn35', 8)) for n in range(1, last + 1)),
 }
 EARLIER_ACCUMULATOR_FIRSTLAST = ('stationtype', 'apName', 'model')
+
+
+def configured_mappings(config_dict):
+    """{WeeWX field: device field} from [[field_map]] and
+    [[field_map_extensions]] of the driver's section and its [[sources]]."""
+
+    section = driver_config(config_dict)
+    sections = [section] + [s for s in (section.get('sources') or {}).values() if hasattr(s, 'get')]
+    return {str(field): str(source) for s in sections for name in ('field_map', 'field_map_extensions')
+            for field, source in (s.get(name) or {}).items()}
+
+
+def changed_fields(config_dict):
+    """The WeeWX fields whose field map settings differ from the default map
+    (an entry the same as the default, as an earlier version's full
+    [[field_map]] has, isn't a choice)."""
+
+    return {field for field, source in configured_mappings(config_dict).items()
+            if HttpMapper.default_map.get(field) != source}
 
 
 def configured_fields(config_dict):
@@ -11628,6 +11688,11 @@ class DirectEcowittDevice:
             print('These driver fields go to standard station database columns (battery levels as 0 OK, 1 low):')
             for column, fields in FieldMapper.station_columns.items():
                 print(f"{column:>23}: {' or '.join(fields)}")
+        if FieldMapper.station_unused:
+            print()
+            print('Standard station database columns not used:')
+            for column, why in FieldMapper.station_unused.items():
+                print(f"{column:>23}: {why}")
         if FieldMapper.conventional_names:
             print()
             print('These driver fields are also given the conventional name a database has a column for:')
@@ -11765,6 +11830,12 @@ class DirectEcowittDevice:
                     # text (stationtype, model, apName)
                     result[key] = mapped_data[key]
                     continue
+                if (weewx.units.getStandardUnitType(self.unit_system, key)[1] is None
+                        and isinstance(mapped_data[key], (int, float))):
+                    # no unit group (batteryStatus1, signal1 ...): the number as it is
+                    value = mapped_data[key]
+                    result[key] = str(int(value)) if float(value).is_integer() else str(value)
+                    continue
                 key_vt = weewx.units.as_value_tuple(mapped_data, key)
                 key_vh = weewx.units.ValueHelper(key_vt, formatter=f, converter=c)
                 result[key] = key_vh.toString(None_string='None')
@@ -11774,6 +11845,14 @@ class DirectEcowittDevice:
             print()
             print(f'{collector.device.model} live sensor data ({timestamp_to_string(datetime)}): '
                   f'{weeutil.weeutil.to_sorted_string(result)}')
+            # standard columns (batteryStatus1 ...) that readings shown here don't go to, and why
+            unused = {c: why for c, why in FieldMapper.station_unused.items()
+                      if any(f in result for f in STATION_COLUMNS[c])}
+            if unused:
+                print()
+                print('Shown under the driver\'s names, not the standard station database columns:')
+                for column, why in unused.items():
+                    print(f"    {column} ({' or '.join(STATION_COLUMNS[column])}): {why}")
 
     def display_discovered_devices(self):
         """Display discovered devices.

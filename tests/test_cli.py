@@ -4,6 +4,7 @@ Every command is run against an HTTP API gateway (GW2000) and a GW1000 (TCP API)
 a traceback. ecowitt_http.py 0.1.0a28 had several that did (see the CHANGELOG)."""
 
 import json
+import re
 import optparse
 import sys
 
@@ -250,5 +251,10 @@ def test_weectl_live_data_uses_the_standard_column_names(egw, http_config, capsy
         out = run(egw, http_config, capsys, '--live-data')
     finally:
         egw.FieldMapper.station_columns, egw.FieldMapper.conventional_names = saved
-    assert 'batteryStatus1: 0' in out and 'signal1: 4' in out and 'wn31_ch1_batt' not in out
+    assert re.search(r'batteryStatus1: 0(,|$)', out) and re.search(r'signal1: 4(,|$)', out) and 'wn31_ch1_batt' not in out
     assert 'rainBatteryStatus: 0' in out and 'wh40_batt: 4' in out
+
+
+def test_live_data_shows_rssi(egw, http_config, capsys):
+    out = run(egw, http_config, capsys, '--live-data')
+    assert 'wh40_rssi: -71' in out and 'ws90_rssi: -62' in out

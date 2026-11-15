@@ -81,3 +81,19 @@ def test_voltage_fields_are_mapped(egw, gateways):
     finally:
         source.stop()
     assert packet['wh68_volt'] == 1.9 and packet['wh40_volt'] == 1.6
+
+
+def test_rssi_fields_in_loop_packets(egw, gateways):
+    """Each sensor's rssi (dBm) beside its signal: wh40_rssi, wn31_ch1_rssi ..."""
+    http, tcp = gateways
+    source = egw.GatewaySource('gateway', {'ip_address': http.address, 'api': 'http', 'tcp_port': str(tcp.port),
+                                           'max_tries': '1', 'retry_wait': '0',
+                                           'firmware_update_check_interval': '0',
+                                           'catchup': {'source': 'none'}})
+    try:
+        packet = source.loop_packet(source.collector.get_current_data())
+    finally:
+        source.stop()
+    assert packet['wh40_rssi'] == -71 and packet['wh68_rssi'] == -53 and packet['ws90_rssi'] == -62
+    assert packet['wh40_sig'] == 4
+    assert egw.accumulator_extractors()['wh40_rssi'] == 'last'

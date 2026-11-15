@@ -1,12 +1,12 @@
 {
 "cli": {
 "--active-map": {
-"digest": "5ce5fb29e40ccb84",
-"lines": 91
+"digest": "917a5f10dc3f8668",
+"lines": 122
 },
 "--active-map --no-sensor-map": {
-"digest": "5ce5fb29e40ccb84",
-"lines": 91
+"digest": "917a5f10dc3f8668",
+"lines": 122
 },
 "--active-map [down]": {
 "digest": "e9b12324ec993554",
@@ -21,20 +21,20 @@
 "lines": 9
 },
 "--default-map": {
-"digest": "1c05805b7c7f1406",
-"lines": 312
+"digest": "c3df40dbcf9166db",
+"lines": 375
 },
 "--default-map [down]": {
-"digest": "1c05805b7c7f1406",
-"lines": 312
+"digest": "c3df40dbcf9166db",
+"lines": 375
 },
 "--default-map [null]": {
-"digest": "1c05805b7c7f1406",
-"lines": 312
+"digest": "c3df40dbcf9166db",
+"lines": 375
 },
 "--default-map [sparse]": {
-"digest": "1c05805b7c7f1406",
-"lines": 312
+"digest": "c3df40dbcf9166db",
+"lines": 375
 },
 "--driver-map": {
 "digest": "2f8aa7319e4ac001",
@@ -213,20 +213,20 @@
 "lines": 5
 },
 "--live-data": {
-"digest": "dc693d13dbc607a6",
-"lines": 7
+"digest": "a6b7d630bc8c210f",
+"lines": 15
 },
 "--live-data --show-all-batt": {
-"digest": "dc693d13dbc607a6",
-"lines": 7
+"digest": "a6b7d630bc8c210f",
+"lines": 15
 },
 "--live-data --units metricwx": {
-"digest": "dc693d13dbc607a6",
-"lines": 7
+"digest": "a6b7d630bc8c210f",
+"lines": 15
 },
 "--live-data --units us": {
-"digest": "98c253c8651db3df",
-"lines": 7
+"digest": "2c0fdd95027ce590",
+"lines": 15
 },
 "--live-data [down]": {
 "digest": "e9b12324ec993554",
@@ -313,20 +313,20 @@
 "lines": 4
 },
 "--service-map": {
-"digest": "5b86e3c22263ac4b",
-"lines": 314
+"digest": "a506702c4d3199f5",
+"lines": 377
 },
 "--service-map [down]": {
-"digest": "5b86e3c22263ac4b",
-"lines": 314
+"digest": "a506702c4d3199f5",
+"lines": 377
 },
 "--service-map [null]": {
-"digest": "5b86e3c22263ac4b",
-"lines": 314
+"digest": "a506702c4d3199f5",
+"lines": 377
 },
 "--service-map [sparse]": {
-"digest": "5b86e3c22263ac4b",
-"lines": 314
+"digest": "a506702c4d3199f5",
+"lines": 377
 },
 "--sources": {
 "digest": "c48af96505dae87d",
@@ -365,24 +365,24 @@
 "lines": 5
 },
 "--version": {
-"digest": "8d007a815ff7dff8",
+"digest": "7dd083e7ed7ebb3d",
 "lines": 1
 },
 "--version [down]": {
-"digest": "8d007a815ff7dff8",
+"digest": "7dd083e7ed7ebb3d",
 "lines": 1
 },
 "--version [null]": {
-"digest": "8d007a815ff7dff8",
+"digest": "7dd083e7ed7ebb3d",
 "lines": 1
 },
 "--version [sparse]": {
-"digest": "8d007a815ff7dff8",
+"digest": "7dd083e7ed7ebb3d",
 "lines": 1
 },
 "--weewx-fields": {
-"digest": "a3d29a042294326b",
-"lines": 85
+"digest": "2f92d664e540c467",
+"lines": 92
 },
 "--weewx-fields [down]": {
 "digest": "a5a3c0b0509a02b0",

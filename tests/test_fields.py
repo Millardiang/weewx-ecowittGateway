@@ -37,7 +37,7 @@ def test_accumulator_entries_follow_the_field_map(egw):
         assert accum[field]['extractor'] == 'sum', field
     for field in ('rainRate', 'p_rainrate', 'outTemp', 'ws90_volt', 'pm25_ch1_real'):
         assert field not in accum, field       # averaged
-    renamed = {'wn32_batt', 'wn32_sig', 'wn32p_batt', 'wn32p_sig'}     # wn32_indoor/wn32_outdoor
+    renamed = {'wn32_batt', 'wn32_sig', 'wn32_rssi', 'wn32p_batt', 'wn32p_sig', 'wn32p_rssi'}  # wn32_indoor/outdoor
     # and the station database columns some fields go to with the additions database on
     assert set(accum) - set(fmap) == (set(egw.ACCUMULATOR_SUM) | renamed | set(egw.STATION_COLUMNS)
                                    | {n for n, f in egw.CONVENTIONAL_NAMES.items() if f in fmap and n in accum})

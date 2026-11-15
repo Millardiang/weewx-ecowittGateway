@@ -3,6 +3,26 @@
 All notable changes to weewx-ecowittGateway are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.4] – 15 November 2026
+
+### Fixed
+
+- The standard columns (`batteryStatus1`, `signal1` …) weren't used, and readings stayed under
+  the driver's names (`wn31_ch1_batt`), when the field map settings repeated the default map (as an
+  earlier version's full `[[field_map]]` does) or the station database had a column of the driver's
+  name (an earlier version added it). A setting the same as the default no longer counts, and a
+  field with a column of its own is kept and copied to the standard column. The station database's
+  columns are read from the database first (its schema module isn't needed).
+- `weectl device --live-data` showed values without a unit (`batteryStatus1`) as `0.000000`.
+
+### Added
+
+- `<sensor>_rssi`: each sensor's received signal strength (dBm), beside `<sensor>_sig`
+  (`wh40_rssi`, `wn31_ch1_rssi` …), as earlier versions had.
+- `runtime`: how long the gateway has been running (seconds), as earlier versions had.
+- `weectl device --active-map` lists the standard columns not used and why; `--live-data` says why
+  when it shows a reading under the driver's name.
+
 ## [2.1.3] – 15 November 2026
 
 ### Fixed

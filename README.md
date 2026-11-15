@@ -17,6 +17,15 @@ is `[EcowittGateway]` and its file is `bin/user/weewx-ecowittGateway.py`. In the
 
 **Note:** General support issues for weewx-ecowittGateway should be raised in the Google Groups [weewx-user forum](https://groups.google.com/g/weewx-user "Google Groups weewx-user forum"). The Ecowitt local HTTP driver [Issues Page](https://github.com/gjr80/weewx-ecowitt_local_http/issues "Ecowitt local HTTP driver Issues") should only be used for specific bugs in the Ecowitt local HTTP driver code. It is recommended that even if an Ecowitt local HTTP driver bug is suspected, users first post to the Google Groups [weewx-user forum](https://groups.google.com/g/weewx-user "Google Groups weewx-user forum").
 
+## Thank you
+
+To everyone who has helped to stamp out the bugs and made positive suggestions for improvements. In particular: -
+   - Michael Kainzbauer
+   - Paul R Anderson
+   - Vince Skahan
+   - Ray Zorb
+   - John Burricelli
+   
 ## Description
 
 The Ecowitt local HTTP driver is a WeeWX driver that supports devices compatible with the Ecowitt Local HTTP API, and the GW1000 through the Ecowitt TCP API.

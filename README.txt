@@ -14,44 +14,42 @@ tests and the layout of the code.
 
 Compared with ecowitt_http.py the driver is called EcowittGateway, its section of weewx.conf is
 [EcowittGateway] and its file is bin/user/weewx-ecowittGateway.py. In the rest of this README, "the
-Ecowitt local HTTP driver" means this driver.
+Ecowitt driver" means this driver.
 
 Note: General support issues for weewx-ecowittGateway should be raised in the Google Groups
 [weewx-user forum](https://groups.google.com/g/weewx-user "Google Groups weewx-user forum"). The
-Ecowitt local HTTP driver [Issues Page](https://github.com/gjr80/weewx-ecowitt_local_http/issues
-"Ecowitt local HTTP driver Issues") should only be used for specific bugs in the Ecowitt local HTTP
-driver code. It is recommended that even if an Ecowitt local HTTP driver bug is suspected, users
-first post to the Google Groups [weewx-user forum](https://groups.google.com/g/weewx-user "Google
-Groups weewx-user forum").
+weewx-ecowittGateway [Issues Page](https://github.com/Millardiang/weewx-ecowittGateway/issues
+"weewx-ecowittGateway Issues") should only be used for specific bugs in the Ecowitt driver code. It
+is recommended that even if an Ecowitt driver bug is suspected, users first post to the Google
+Groups [weewx-user forum](https://groups.google.com/g/weewx-user "Google Groups weewx-user forum").
 
 Description
 ===========
 
-The Ecowitt local HTTP driver is a WeeWX driver that supports devices compatible with the Ecowitt
-Local HTTP API, and the GW1000 through the Ecowitt TCP API.
+The Ecowitt driver is a WeeWX driver that supports devices compatible with the Ecowitt Local HTTP
+API, and the GW1000 through the Ecowitt TCP API.
 
-The Ecowitt local HTTP driver utilises the Ecowitt Local HTTP API thus using a pull methodology for
-obtaining data from the device rather than the push methodology. This has the advantage of giving
-the user more control over when the data is obtained from the device.
+The Ecowitt driver utilises the Ecowitt Local HTTP API thus using a pull methodology for obtaining
+data from the device rather than the push methodology. This has the advantage of giving the user
+more control over when the data is obtained from the device.
 
-The Ecowitt local HTTP driver can be operated as a traditional WeeWX driver where it is the source
-of loop data, or it can be operated as a WeeWX service where it is used to augment loop data
-produced by another driver.
+The Ecowitt driver can be operated as a traditional WeeWX driver where it is the source of loop
+data, or it can be operated as a WeeWX service where it is used to augment loop data produced by
+another driver.
 
 Pre-Requisites
 ==============
 
-The Ecowitt local HTTP driver requires:
+The Ecowitt driver requires:
 
 - WeeWX v5.0.0 or greater
 - Python v3.6 or later
 
-Note: Whilst the Ecowitt local HTTP driver has been written to be compatible with Python v3.6 and
-later, the driver utilises a number of features introduced in WeeWX v5.0.0 and hence cannot be
-reliably run under WeeWX v4.x and Python v3. The driver extension installer will refuse to install
-the driver under WeeWX v4 or earlier. The driver may be installed manually under WeeWX v4.x and
-Python v3, and it may work; however, this configuration is not supported. The driver will not run
-under Python v2.
+Note: Whilst the Ecowitt driver has been written to be compatible with Python v3.6 and later, the
+driver utilises a number of features introduced in WeeWX v5.0.0 and hence cannot be reliably run
+under WeeWX v4.x and Python v3. The driver extension installer will refuse to install the driver
+under WeeWX v4 or earlier. The driver may be installed manually under WeeWX v4.x and Python v3, and
+it may work; however, this configuration is not supported. The driver will not run under Python v2.
 
 Installation Instructions
 =========================
@@ -63,11 +61,11 @@ Vagrant or Ansible. The summary follows.
 Installation as a WeeWX driver
 ------------------------------
 
-1. If the Ecowitt local HTTP driver is to be installed on a fresh WeeWX installation first install
-   WeeWX (http://weewx.com/docs/5.1/usersguide/installing/) and configure WeeWX to use the simulator
+1. If the Ecowitt driver is to be installed on a fresh WeeWX installation first install WeeWX
+   (http://weewx.com/docs/5.1/usersguide/installing/) and configure WeeWX to use the simulator
    driver.
 
-2. Install the latest version of the Ecowitt local HTTP driver using the weectl utility
+2. Install the latest version of the Ecowitt driver using the weectl utility
    (http://weewx.com/docs/5.1/utilities/weectl-extension/#install-an-extension).
 
     Note: The exact command syntax to invoke weectl on your system will depend on the installer used
@@ -95,8 +93,8 @@ Installation as a WeeWX driver
     features (see Configuration). Press Enter to accept the value in [brackets]. Without a terminal,
     or with ECOWITT_* environment variables, it runs unattended: see Unattended install.
 
-3. Test the Ecowitt local HTTP driver by running the driver file directly using the --test-driver
-   command line option.
+3. Test the Ecowitt driver by running the driver file directly using the --test-driver command line
+   option.
 
     For WeeWX package installs use:
 
@@ -151,8 +149,7 @@ Installation as a WeeWX driver
    archive records being generated by WeeWX. If WeeWX is already running stop WeeWX before running
    the driver directly.
 
-6. Once satisfied that the Ecowitt local HTTP driver is operating correctly you can restart the
-   WeeWX daemon:
+6. Once satisfied that the Ecowitt driver is operating correctly you can restart the WeeWX daemon:
 
         sudo /etc/init.d/weewx restart
 
@@ -166,8 +163,8 @@ Installation as a WeeWX driver
 
 7. You may wish to refer to the wiki for Gary Roderick's ecowitt_http.py
    (https://github.com/gjr80/weewx-ecowitt_local_http/wiki) (written for ecowitt_http.py: use the
-   names above) for further guidance on customising the operation of the Ecowitt local HTTP driver
-   and integrating device data into WeeWX generated reports.
+   names above) for further guidance on customising the operation of the Ecowitt driver and
+   integrating device data into WeeWX generated reports.
 
 Installation as a WeeWX service
 -------------------------------
@@ -175,8 +172,8 @@ Installation as a WeeWX service
 1. Install WeeWX (http://weewx.com/docs/5.1/usersguide/installing/) and configure it to use either
    the simulator driver or another driver of your choice.
 
-2. Install the Ecowitt local HTTP driver extension using the weectl utility as per Installation as a
-   WeeWX driver step&nbsp;2 above.
+2. Install the Ecowitt driver extension using the weectl utility as per Installation as a WeeWX
+   driver step&nbsp;2 above.
 
 3. If you chose service when installing, this step is not needed. Otherwise edit weewx.conf and
    under the [Engine] [[Services]] stanza add an entry user.weewx-ecowittGateway.EcowittHttpService
@@ -214,11 +211,11 @@ Installation as a WeeWX service
 
    You should observe loop packets being emitted on a regular basis.
 
-   Note: When the Ecowitt local HTTP driver is run directly with the --test-service command line
-   option a series of simulated loop packets are emitted every 10 seconds to simulate a running
-   WeeWX instance. The gateway device is polled and the gateway device data added to the loop
-   packets when available. As the default gateway device poll interval is 20 seconds not all loop
-   packets will be augmented with gateway device data.
+   Note: When the Ecowitt driver is run directly with the --test-service command line option a
+   series of simulated loop packets are emitted every 10 seconds to simulate a running WeeWX
+   instance. The gateway device is polled and the gateway device data added to the loop packets when
+   available. As the default gateway device poll interval is 20 seconds not all loop packets will be
+   augmented with gateway device data.
 
    Note: You will only see loop packets and not archive records when running the service directly.
    This is because you are seeing the direct output of the simulated loop packets and the Ecowitt
@@ -249,8 +246,8 @@ Installation as a WeeWX service
 
 7. You may wish to refer to the wiki for Gary Roderick's ecowitt_http.py
    (https://github.com/gjr80/weewx-ecowitt_local_http/wiki) (written for ecowitt_http.py: use the
-   names above) for further guidance on customising the operation of the Ecowitt local HTTP driver
-   and integrating device data into WeeWX generated reports.
+   names above) for further guidance on customising the operation of the Ecowitt driver and
+   integrating device data into WeeWX generated reports.
 
 Configuration
 =============
@@ -780,13 +777,12 @@ Install the new version as per the Installation Instructions above.
 Support
 =======
 
-General support issues for the Ecowitt local HTTP driver should be raised in the Google Groups
-[weewx-user forum](https://groups.google.com/g/weewx-user "Google Groups weewx-user forum"). The
-Ecowitt local HTTP driver [Issues Page](https://github.com/gjr80/weewx-ecowitt_local_http/issues
-"Ecowitt local HTTP driver Issues") should only be used for specific bugs in the Ecowitt local HTTP
-driver code. It is recommended that even if an Ecowitt local HTTP driver bug is suspected users
-first post to the Google Groups [weewx-user forum](https://groups.google.com/g/weewx-user "Google
-Groups weewx-user forum").
+General support issues for the Ecowitt driver should be raised in the Google Groups [weewx-user
+forum](https://groups.google.com/g/weewx-user "Google Groups weewx-user forum"). The
+weewx-ecowittGateway [Issues Page](https://github.com/Millardiang/weewx-ecowittGateway/issues
+"weewx-ecowittGateway Issues") should only be used for specific bugs in the Ecowitt driver code. It
+is recommended that even if an Ecowitt driver bug is suspected users first post to the Google Groups
+[weewx-user forum](https://groups.google.com/g/weewx-user "Google Groups weewx-user forum").
 
 Licensing
 =========

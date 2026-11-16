@@ -1,6 +1,6 @@
 # weewx-ecowittGateway
 
-**Version:** 2.1.4 · WeeWX driver and service for Ecowitt gateways and consoles
+**Version:** 2.1.5 · WeeWX driver and service for Ecowitt gateways and consoles
 (local HTTP API, or the TCP API for the GW1000)
 
 weewx-ecowittGateway is built on Gary Roderick's Ecowitt local HTTP API driver (`ecowitt_http.py`
@@ -50,17 +50,17 @@ Vagrant or Ansible. The summary follows.
 
     For WeeWX package installs:
 
-        weectl extension install weewx-ecowittGateway-2.1.4.zip
+        weectl extension install weewx-ecowittGateway-2.1.5.zip
 
     For WeeWX *pip* installs the Python virtual environment must be activated before the extension is installed:
 
         source ~/weewx-venv/bin/activate
-        weectl extension install weewx-ecowittGateway-2.1.4.zip
+        weectl extension install weewx-ecowittGateway-2.1.5.zip
 
     For WeeWX installs from *git* the Python virtual environment must be activated before the extension is installed:
 
         source ~/weewx-venv/bin/activate
-        python3 ~/weewx/src/weectl.py extension install weewx-ecowittGateway-2.1.4.zip
+        python3 ~/weewx/src/weectl.py extension install weewx-ecowittGateway-2.1.5.zip
 
     The installer asks for the device IP address (and checks it), whether to use the device as the
     station driver or as a service, which rain gauge WeeWX `rain` comes from, and the optional
@@ -376,9 +376,14 @@ calculated by WeeWX). The Ecowitt-specific fields (`t_rainday`, `wh40_batt`, `pm
 `gateway_online_garden` …) have no column there.
 
 **The additions database.** With `[[additions]] enable = True` (the installer asks, default yes),
-the `EcowittAdditions` service archives the fields of each archive record, live and catchup, that
-the station's database has no column for in a database of their own, `ecowitt_additions.sdb` (next
-to `weewx.sdb`). It needs no setting up: a column, with its daily summary, is added the first time a
+the `EcowittAdditions` service archives the driver's fields of each archive record, live and
+catchup, that the station's database has no column for in a database of their own,
+`ecowitt_additions.sdb` (next to `weewx.sdb`). Only this driver's fields are kept: those in its
+field map (with your `[[field_map_extensions]]` names), `gateway_online`, and those WeeWX works out
+from them with `[[Delta]]` (`t_rain`, `p_rain`). Fields other extensions add to the archive record
+(MQTT subscriptions, filepile …) are left to them, archived or not as you set them up; to keep some
+of them here as well, name them in `[[additions]] extra_fields = field1, field2`
+(`extra_fields = all` keeps every field the station's database has no column for). It needs no setting up: a column, with its daily summary, is added the first time a
 field has a value, so a sensor paired later gets its columns then, and sensors that aren't paired
 add none. Only numbers are stored. Skins, the Seasons skin included, and plots use the fields by
 name as if they were in the station's database (the service registers a WeeWX xtype that looks up
@@ -451,6 +456,11 @@ then on the field is archived there, not in the additions database:
     weectl database add-column wh40_batt --type=REAL
 
 `weectl device --active-map` lists the fields your sensors fill.
+
+Before 2.1.5 the additions database kept other extensions' fields too. Their columns stay but no
+longer fill; to remove them, stop WeeWX and drop them from the additions database:
+
+    weectl database drop-columns mqtt_attic_temp lake_level --binding=ecowitt_binding
 
 **Battery and signal fields** are named after the sensor, with the channel for multi-channel
 sensors: `wh40_batt`, `ws90_sig`, `wn31_ch2_batt`, `wh51_ch3_sig`, and `_volt` for a battery voltage
@@ -625,7 +635,7 @@ Every installer question can be answered with an `ECOWITT_*` environment variabl
 be scripted (for example in a Vagrant or Ansible provisioner):
 
     sudo ECOWITT_NO_PROMPT=yes ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \
-        weectl extension install --yes weewx-ecowittGateway-2.1.4.zip
+        weectl extension install --yes weewx-ecowittGateway-2.1.5.zip
 
 Questions without a variable take their default (the existing setting where there is one), and the
 installer prints each answer and where it came from. A variable with a value the installer cannot

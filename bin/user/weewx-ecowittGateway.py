@@ -26,9 +26,12 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 2.1.4
+Version: 2.1.5
 
 Revision History
+    2.1.5 (16 November 2026)
+        - the additions database keeps only the driver's fields
+          ([[additions]] extra_fields for others)
     2.1.4 (15 November 2026)
         - standard columns used when the field map settings repeat the default
           or the driver field has its own column (copied); why not, in
@@ -191,7 +194,7 @@ log = logging.getLogger(__name__)
 
 
 DRIVER_NAME = 'EcowittGateway'
-DRIVER_VERSION = '2.1.4'
+DRIVER_VERSION = '2.1.5'
 # config section used by ecowitt_http.py; read if there is no [EcowittGateway]
 LEGACY_DRIVER_NAME = 'EcowittHttp'
 # this module, as WeeWX loads it
@@ -2499,14 +2502,54 @@ def use_station_columns(config_dict, label=DRIVER_NAME):
     return FieldMapper.station_columns
 
 
+def driver_fields(config_dict):
+    """The WeeWX fields this driver produces, which the additions database
+    keeps (other extensions' fields are theirs to archive, or not):
+
+    - the field map's fields (the default map, with either WN32 setting, and
+      the [[field_map]] and [[field_map_extensions]] fields of the driver's
+      section and its [[sources]]), and the standard columns and conventional
+      names some of them also go to;
+    - the fields WeeWX works out from them with [StdWXCalculate] [[Delta]]
+      (t_rain, p_rain ...);
+    - gateway_online and, with several gateways, gateway_online_<name>
+      (driver_field() checks the prefix);
+    - [[additions]] extra_fields, any other fields to keep too.
+
+    Returns None for [[additions]] extra_fields = all: every field the station
+    database has no column for is kept, whatever produced it."""
+
+    conf = driver_config(config_dict).get('additions') or {}
+    extra = [f.strip() for item in (weeutil.weeutil.option_as_list(conf.get('extra_fields')) or [])
+             for f in str(item).split(',') if f.strip()]
+    if any(str(f).lower() == 'all' for f in extra):
+        return None
+    fields = set(configured_mappings(config_dict)) | set(STATION_COLUMNS) | set(CONVENTIONAL_NAMES)
+    for wn32 in (False, True):
+        mapper = HttpMapper(driver_debug=DebugOptions(), quiet=True, wn32_indoor=wn32, wn32_outdoor=wn32)
+        fields |= set(mapper.field_map)
+    fields.add('gateway_online')
+    rules = (config_dict.get('StdWXCalculate') or {}).get('Delta') or {}
+    fields |= {str(name) for name, rule in rules.items()
+               if hasattr(rule, 'get') and str(rule.get('input')) in fields}
+    return fields | {str(f) for f in extra}
+
+
+def driver_field(field, fields):
+    """Whether field is one of fields (driver_fields(); None means any)."""
+
+    return fields is None or field in fields or field.startswith('gateway_online_')
+
+
 class EcowittAdditions(weewx.engine.StdService):
     """Archive the fields of each archive record that the station's database
     has no column for, in a database of their own.
 
     Runs in archive_services, so it sees every archive record, live and
     catchup, with all its fields; the station's database ([StdArchive]
-    data_binding) keeps the ones it has columns for. The rest (numbers only)
-    go to [[additions]] data_binding (default ecowitt_binding,
+    data_binding) keeps the ones it has columns for. The rest of the driver's
+    fields (driver_fields(); numbers only; other extensions' fields are left
+    alone) go to [[additions]] data_binding (default ecowitt_binding,
     ecowitt_additions.sdb), which gets a column, with a daily summary, the
     first time a field has a value. Skins use them by name like any other
     field (AdditionsXType), eg $day.wh40_batt.last, or with that binding. Off
@@ -2524,6 +2567,8 @@ class EcowittAdditions(weewx.engine.StdService):
         # columns of other extensions' databases (DivumWX's divumwx_extras.sdb
         # ...): those extensions keep the fields of those names
         self.elsewhere = set()
+        # the fields kept (None: all)
+        self.fields = driver_fields(config_dict)
         if self.enabled:
             for binding in other_bindings(config_dict):
                 columns = binding_columns(config_dict, binding) or set()
@@ -2531,8 +2576,9 @@ class EcowittAdditions(weewx.engine.StdService):
                 if columns:
                     log.info('EcowittAdditions: fields with a column in %s are left to it', binding)
             self.bind(weewx.NEW_ARCHIVE_RECORD, self.new_archive_record)
-            log.info("EcowittAdditions: fields the %s database has no column for are archived "
-                     "with %s", self.main_binding, self.binding)
+            log.info("EcowittAdditions: %s the %s database has no column for are archived "
+                     "with %s", 'fields' if self.fields is None else "the driver's fields",
+                     self.main_binding, self.binding)
             self.xtype = AdditionsXType(config_dict, self.binding)
             weewx.xtypes.xtypes.append(self.xtype)
 
@@ -2555,7 +2601,7 @@ class EcowittAdditions(weewx.engine.StdService):
         conventional = FieldMapper.conventional_names
         main_columns |= set(conventional) | set(conventional.values()) | self.elsewhere
         extra = {k: v for k, v in record.items()
-                 if k not in main_columns and COLUMN_NAME.match(k)
+                 if k not in main_columns and COLUMN_NAME.match(k) and driver_field(k, self.fields)
                  and (v is None or isinstance(v, (int, float)))}
         if not any(v is not None for v in extra.values()):
             return

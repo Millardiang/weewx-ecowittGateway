@@ -4,6 +4,19 @@ CHANGELOG
 All notable changes to weewx-ecowittGateway are recorded here. Versions follow Semantic Versioning
 (https://semver.org/).
 
+[2.1.5] – 16 November 2026
+==========================
+
+Fixed
+-----
+
+- The additions database kept every field of the archive record the station's database has no column
+  for, including other extensions' fields (MQTT subscriptions, filepile …) a user had left out of
+  the database on purpose. It now keeps only the driver's fields: those in its field map (with
+  [[field_map_extensions]] names), gateway_online, and those WeeWX works out from them with
+  [[Delta]]. [[additions]] extra_fields keeps named other fields too (all: every field, as before).
+  Columns already added for other fields stay, but no longer fill.
+
 [2.1.4] – 15 November 2026
 ==========================
 

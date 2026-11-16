@@ -394,3 +394,51 @@ def test_conventional_names_stay_out_of_the_additions_database(columns_map, tmp_
         assert columns == ['dateTime', 'usUnits', 'interval', 't_rainday', 't_rainweek']
     finally:
         egw.FieldMapper.conventional_names = saved
+
+
+# ---- only the driver's fields (issue: other extensions' fields were archived too) ----
+
+def test_other_extensions_fields_are_left_alone(station):
+    """Fields another extension adds to the archive record (MQTT subscribe, filepile ...) and the
+    user left out of the station database stay out of the additions database too."""
+    engine, _, tmp_path = station
+    engine.archive(record(1_700_000_100, wh40_batt=4.0, t_rainday=0.1, gateway_online=1,
+                          gateway_online_garden=1, mqtt_attic_temp=21.5, filepile_lake_level=2.3))
+    columns = [c[1] for c in rows(tmp_path / 'ecowitt_additions.sdb', 'PRAGMA table_info(archive)')]
+    assert columns == ['dateTime', 'usUnits', 'interval', 'wh40_batt', 't_rainday', 'gateway_online',
+                       'gateway_online_garden']
+
+
+def test_driver_fields(egw, tmp_path):
+    conf = config(tmp_path)
+    conf['EcowittGateway']['field_map_extensions'] = {'shed_temp': 'ch_aisle.3.temp'}
+    conf['EcowittGateway']['sources'] = {'garden': {'field_map_extensions': {'pond_temp': 'ch_temp.1.temp'}}}
+    conf['StdWXCalculate'] = {'Delta': {'rain': {'input': 't_rainyear'}, 'p_rain': {'input': 'p_rainyear'},
+                                        'other': {'input': 'someone_elses_total'}}}
+    fields = egw.driver_fields(conf)
+    for field in ('wh40_batt', 'wn31_ch1_rssi', 'wn32_batt', 'heap_free', 'runtime', 'shed_temp', 'pond_temp',
+                  'p_rain', 'rain', 'gateway_online', 'batteryStatus1', 'p_dayRain'):
+        assert field in fields, field
+    assert 'other' not in fields and 'mqtt_attic_temp' not in fields
+    assert egw.driver_field('gateway_online_garden', fields)
+
+
+def test_extra_fields(egw, tmp_path):
+    conf = config(tmp_path)
+    conf['EcowittGateway']['additions']['extra_fields'] = 'mqtt_attic_temp, lake_level'
+    fields = egw.driver_fields(conf)
+    assert 'mqtt_attic_temp' in fields and 'lake_level' in fields and 'wh40_batt' in fields
+    conf['EcowittGateway']['additions']['extra_fields'] = 'all'
+    assert egw.driver_fields(conf) is None
+    assert egw.driver_field('anything', None)
+
+
+def test_extra_fields_all_keeps_every_field(egw, tmp_path):
+    conf = config(tmp_path)
+    conf['EcowittGateway']['additions']['extra_fields'] = 'all'
+    engine = Engine(conf)
+    egw.EcowittAdditions(engine, conf)
+    engine.archive(record(1_700_000_100, wh40_batt=4.0, mqtt_attic_temp=21.5))
+    engine.db_binder.close()
+    columns = [c[1] for c in rows(tmp_path / 'ecowitt_additions.sdb', 'PRAGMA table_info(archive)')]
+    assert 'mqtt_attic_temp' in columns and 'wh40_batt' in columns

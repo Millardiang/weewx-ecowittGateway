@@ -1,7 +1,7 @@
 WEEWX-ECOWITTGATEWAY
 ====================
 
-Version: 2.1.5 · WeeWX driver and service for Ecowitt gateways and consoles (local HTTP API, or the
+Version: 2.1.6 · WeeWX driver and service for Ecowitt gateways and consoles (local HTTP API, or the
 TCP API for the GW1000)
 
 weewx-ecowittGateway is built on Gary Roderick's Ecowitt local HTTP API driver (ecowitt_http.py
@@ -77,18 +77,18 @@ Installation as a WeeWX driver
 
     For WeeWX package installs:
 
-        weectl extension install weewx-ecowittGateway-2.1.5.zip
+        weectl extension install weewx-ecowittGateway-2.1.6.zip
 
     For WeeWX pip installs the Python virtual environment must be activated before the extension is
     installed:
 
-        source ~/weewx-venv/bin/activate weectl extension install weewx-ecowittGateway-2.1.5.zip
+        source ~/weewx-venv/bin/activate weectl extension install weewx-ecowittGateway-2.1.6.zip
 
     For WeeWX installs from git the Python virtual environment must be activated before the
     extension is installed:
 
         source ~/weewx-venv/bin/activate python3 ~/weewx/src/weectl.py extension install
-        weewx-ecowittGateway-2.1.5.zip
+        weewx-ecowittGateway-2.1.6.zip
 
     The installer asks for the device IP address (and checks it), whether to use the device as the
     station driver or as a service, which rain gauge WeeWX rain comes from, and the optional
@@ -711,7 +711,7 @@ Every installer question can be answered with an ECOWITT_* environment variable,
 be scripted (for example in a Vagrant or Ansible provisioner):
 
     sudo ECOWITT_NO_PROMPT=yes ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \ weectl
-    extension install --yes weewx-ecowittGateway-2.1.5.zip
+    extension install --yes weewx-ecowittGateway-2.1.6.zip
 
 Questions without a variable take their default (the existing setting where there is one), and the
 installer prints each answer and where it came from. A variable with a value the installer cannot

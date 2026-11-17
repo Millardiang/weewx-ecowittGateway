@@ -13,7 +13,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 Built on the installer for Gary Roderick's Ecowitt Local HTTP API driver
 (ecowitt_http.py 0.1.0a28).
 
-Version: 2.1.5
+Version: 2.1.6
 
 The installer asks for the gateway settings and writes them to weewx.conf,
 with the [EcowittGateway] section placed directly after [Station]. Without a
@@ -28,6 +28,8 @@ scripted:
 ECOWITT_NO_PROMPT=yes stops the installer asking anything, even at a terminal.
 
 Revision History
+    2.1.6 (17 November 2026)
+        -   no installer changes
     2.1.5 (16 November 2026)
         -   [[additions]] comment: only the driver's fields, extra_fields
     2.1.4 (15 November 2026)
@@ -74,7 +76,7 @@ import weewx
 
 
 REQUIRED_WEEWX_VERSION = "5.0.0"
-DRIVER_VERSION = "2.1.5"
+DRIVER_VERSION = "2.1.6"
 SECTION = 'EcowittGateway'
 # ecowitt_http.py's section and service, moved to the names above
 LEGACY_SECTION = 'EcowittHttp'

@@ -4,6 +4,19 @@ CHANGELOG
 All notable changes to weewx-ecowittGateway are recorded here. Versions follow Semantic Versioning
 (https://semver.org/).
 
+[2.1.6] – 17 November 2026
+==========================
+
+Fixed
+-----
+
+- A catchup from Ecowitt.net ended WeeWX with an AttributeError when Ecowitt.net answered "data": []
+  (no data yet for the period, as just after midnight). Data that isn't an object, at any level, now
+  gives no records.
+- radiation from an Ecowitt.net catchup was 126.7 times too small (and illuminance too): the solar
+  value Ecowitt.net gives in W/m² was taken as lux. It is now converted to lux, as the live data has
+  it, and radiation worked out from that. Catchup from the SD card was not affected.
+
 [2.1.5] – 16 November 2026
 ==========================
 

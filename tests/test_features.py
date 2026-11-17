@@ -254,6 +254,42 @@ def test_ecowitt_net_catchup_records(egw, make_driver, station, monkeypatch, inf
     assert 'Catchup: 3 record(s) from Ecowitt.net' in info_log.text
 
 
+def test_ecowitt_net_catchup_radiation(egw, make_driver, station, monkeypatch):
+    """Ecowitt.net gives solar radiation in W/m2 (as asked): it was taken as illuminance in lux, so
+    radiation came out 126.7 times too small (PrivatePixel)."""
+    now = int(time.time()) // 300 * 300
+    timestamps = [now - 600, now - 300]
+
+    def request(self, command_str, data=None, headers=None, max_tries=3):
+        assert data['solar_irradiance_unitid'] == 16          # W/m2
+        return {'code': 0, 'msg': 'success', 'data': {'solar_and_uvi': {
+            'solar': {'unit': 'W/m²', 'list': {str(timestamps[0]): '25.5', str(timestamps[1]): '-'}},
+            'uvi': {'unit': '', 'list': {str(timestamps[0]): '1', str(timestamps[1]): '1'}}}}}
+    monkeypatch.setattr(egw.EcowittNetCatchup, 'request', request)
+    drv = make_driver(**{**station, 'catchup': {'source': 'net', 'api_key': 'key', 'app_key': 'app'}})
+    records = list(drv.genStartupRecords(now - 1000))
+    assert records[0]['radiation'] == pytest.approx(25.5)
+    assert records[0]['illuminance'] == pytest.approx(25.5 * 126.7)
+    assert records[1].get('radiation') is None and records[1]['UV'] == 1
+
+
+@pytest.mark.parametrize('data', [[], None, {'outdoor': []}, {'outdoor': {'temperature': {'list': []}}},
+                                  {'outdoor': {'temperature': {'list': {'1794787200': None}}}}])
+def test_ecowitt_net_catchup_with_no_data(egw, make_driver, station, monkeypatch, data):
+    """Just after midnight Ecowitt.net answered 'data': [], and the AttributeError ended WeeWX
+    (PrivatePixel). Data that isn't an object, at any level, gives no records."""
+    now = int(time.time()) // 300 * 300
+
+    def request(self, command_str, data_=None, headers=None, max_tries=3):
+        return {'code': 0, 'msg': 'success', 'data': data}
+    monkeypatch.setattr(egw.EcowittNetCatchup, 'request',
+                        lambda self, command_str, data=None, headers=None, max_tries=3:
+                        request(self, command_str, data, headers, max_tries))
+    drv = make_driver(**{**station, 'catchup': {'source': 'net', 'api_key': 'key', 'app_key': 'app'}})
+    records = list(drv.genStartupRecords(now - 1000))
+    assert all(r.get('outTemp') is None for r in records)
+
+
 def test_ecowitt_net_catchup_without_keys_saves_nothing(make_driver, station):
     assert list(make_driver(**{**station, 'catchup': {'source': 'net'}}).genStartupRecords(NOV_2)) == []
 

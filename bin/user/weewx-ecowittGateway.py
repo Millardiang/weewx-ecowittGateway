@@ -26,9 +26,12 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 2.1.5
+Version: 2.1.6
 
 Revision History
+    2.1.6 (17 November 2026)
+        - Ecowitt.net catchup: no crash on 'data': []; solar W/m2 converted
+          to lux (radiation was 126.7 times too small)
     2.1.5 (16 November 2026)
         - the additions database keeps only the driver's fields
           ([[additions]] extra_fields for others)
@@ -194,7 +197,7 @@ log = logging.getLogger(__name__)
 
 
 DRIVER_NAME = 'EcowittGateway'
-DRIVER_VERSION = '2.1.5'
+DRIVER_VERSION = '2.1.6'
 # config section used by ecowitt_http.py; read if there is no [EcowittGateway]
 LEGACY_DRIVER_NAME = 'EcowittHttp'
 # this module, as WeeWX loads it
@@ -5304,6 +5307,11 @@ class EcowittNetCatchup(Catchup):
     # as 'outtemp' and 'temp1' that are not in the field map, so a catchup
     # from Ecowitt.net saved records with no data in them.) The values are in
     # the units requested: degree_C, hPa, meter_per_second, mm and W/m2.
+    # Catchup records are in the driver's unit system (METRICWX), in which the
+    # light sensor's field is illuminance in lux, so the solar value (W/m2) is
+    # converted to lux with Ecowitt's factor, as the live data has it:
+    # {driver field: factor}. (radiation is worked out from it again.)
+    net_scale = {'common_list.0x15.val': 126.7}
     net_to_driver_map = {
         'outdoor': {'temperature': 'common_list.0x02.val',
                     'humidity': 'common_list.0x07.val'},
@@ -5467,7 +5475,9 @@ class EcowittNetCatchup(Catchup):
                 # exception.
                 raise
             else:
-                parsed_day_data = self.parse_history(day_data.get('data', dict()))
+                # 'data' is an empty list ([]) or null when Ecowitt.net has
+                # no data for the period (just after midnight, say)
+                parsed_day_data = self.parse_history(day_data.get('data'))
                 # traverse the timestamped data for the day and construct and
                 # yield records, we need the timestamps in ascending order
                 for ts in sorted(parsed_day_data.keys()):
@@ -5594,12 +5604,16 @@ class EcowittNetCatchup(Catchup):
             raise InvalidApiResponseError(f"Invalid API response received")
 
     def parse_history(self, history_data):
-        """Parse Ecowitt.net history data"""
+        """Parse Ecowitt.net history data: {timestamp: {driver field: value}}.
+        Data that isn't an object (Ecowitt.net sends [] or null when it has
+        none for the period) gives no records."""
 
-        #        history_data = json.loads(self.d).get('data', dict())
-        # initialise a dict to hold the parsed data
         result = dict()
+        if not isinstance(history_data, dict):
+            return result
         for set_name, set_data in history_data.items():
+            if not isinstance(set_data, dict):
+                continue
             parsed_set_data = self.parse_data_set(set_name, set_data)
             # the parsed set data is a dict of data keyed by timestamp, iterate
             # over each timestamp: data pair and add the data to the
@@ -5618,12 +5632,13 @@ class EcowittNetCatchup(Catchup):
             field_name = self.get_field_name(set_name, obs)
             # if the field name is not None then add the current obs type data
             # to our results, if the field name is None then skip this obs type
-            if field_name is not None:
+            if field_name is not None and isinstance(obs_data, dict):
                 parsed_data = self.parse_float(obs_data)
+                scale = self.net_scale.get(field_name)
                 for ts, value in parsed_data.items():
                     if ts not in result:
                         result[ts] = dict()
-                    result[ts][field_name] = value
+                    result[ts][field_name] = value * scale if scale and value is not None else value
         return result
 
     @staticmethod
@@ -5679,7 +5694,11 @@ class EcowittNetCatchup(Catchup):
         """
 
         result = dict()
-        for ts_string, value_str in data['list'].items():
+        values = data.get('list')
+        if not isinstance(values, dict):
+            # [] or null: no values
+            return result
+        for ts_string, value_str in values.items():
             # the ts is a string, try to convert to an int, if we cannot
             # skip the ts
             try:
@@ -5688,7 +5707,7 @@ class EcowittNetCatchup(Catchup):
                 continue
             try:
                 result[ts] = float(value_str)
-            except ValueError:
+            except (TypeError, ValueError):
                 result[ts] = None
         return result
 

@@ -26,9 +26,12 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 2.1.6
+Version: 2.1.7
 
 Revision History
+    2.1.7 (20 November 2026)
+        - WH57 lightning: no error logged on every poll for the '--.-'
+          distance a sensor gives before its first strike
     2.1.6 (17 November 2026)
         - Ecowitt.net catchup: no crash on 'data': []; solar W/m2 converted
           to lux (radiation was 126.7 times too small)
@@ -197,7 +200,7 @@ log = logging.getLogger(__name__)
 
 
 DRIVER_NAME = 'EcowittGateway'
-DRIVER_VERSION = '2.1.6'
+DRIVER_VERSION = '2.1.7'
 # config section used by ecowitt_http.py; read if there is no [EcowittGateway]
 LEGACY_DRIVER_NAME = 'EcowittHttp'
 # this module, as WeeWX loads it
@@ -7917,23 +7920,19 @@ class EcowittHttpParser:
     def process_lightning_array(self, response):
         """lightning (WH57): [{'distance': '14 km', 'date':
         '2024-03-21T20:45:37', 'timestamp': '03/21/2024 20:45:37', 'count':
-        '0', 'battery': '4'}]. 'timestamp' becomes a timestamp."""
+        '0', 'battery': '4'}]. 'timestamp' becomes a timestamp. Until the
+        sensor detects a strike the gateway gives placeholders ('distance':
+        '--.-', 'timestamp': '--/--/---- --:--:--'), which become None."""
         item = self._first(response, 'lightning')
         _item = dict()
         self._set(_item, 'count', item, 'count', int, errors=(TypeError, ValueError))
+        # a distance that can't be read (the '--.-' placeholder) is None, as
+        # for every other reading, without logging an error on each poll
         try:
-            dist_vt = self.parse_obs_value(key='distance', json_object=item, unit_group='group_distance')
-        except KeyError:
-            pass
+            self._add(_item, item, 'distance', 'group_distance')
         except UnitError as e:
             log.error('process_lightning_array: Error processing distance unit: %s', e)
             _item['distance'] = None
-        except ParseError as e:
-            log.error('process_lightning_array: Error processing distance: %s', e)
-            _item['distance'] = None
-        else:
-            _item['distance'] = weewx.units.convert(
-                dist_vt, weewx.units.std_groups[self.unit_system]['group_distance']).value
         if 'date' in item:
             _item['date'] = item['date']
         try:

@@ -3,6 +3,16 @@
 All notable changes to weewx-ecowittGateway are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.7] – 20 November 2026
+
+### Fixed
+
+- With a WH57 lightning sensor that hasn't detected a strike yet, `Error processing distance: Could
+  not convert '--.-' to a float` was logged on every poll. Until the first strike the gateway gives
+  `--.-` for the distance (and `--/--/---- --:--:--` for the time); the distance is now left
+  without a value, as the time already was, and nothing is logged. `lightningcount` and the other
+  readings were not affected.
+
 ## [2.1.6] – 17 November 2026
 
 ### Fixed

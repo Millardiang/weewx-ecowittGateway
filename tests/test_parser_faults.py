@@ -34,3 +34,22 @@ def test_livedata_group_error_is_logged(parser, monkeypatch, caplog):
     caplog.set_level(logging.INFO)
     parser.parse_get_livedata_info({'wh25': [{}]})
     assert "Error processing livedata group 'wh25': bad array" in caplog.messages
+
+
+def test_lightning_placeholders_before_first_strike(parser, caplog):
+    """Until the WH57 detects a strike the gateway gives '--.-' for the distance; each poll logged
+    'Error processing distance: Could not convert '--.-' to a float' (2.1.6 and earlier)."""
+    caplog.set_level(logging.DEBUG)
+    data = parser.parse_get_livedata_info({'lightning': [{'distance': '--.-', 'date': '',
+                                                          'timestamp': '--/--/---- --:--:--',
+                                                          'count': '0', 'battery': '5'}]})
+    assert data['lightning.count'] == 0
+    assert data['lightning.distance'] is None and data['lightning.timestamp'] is None
+    assert not [r for r in caplog.records if r.levelno >= logging.INFO]
+
+
+def test_lightning_distance_after_a_strike(parser):
+    data = parser.parse_get_livedata_info({'lightning': [{'distance': '14 km', 'count': '2',
+                                                          'timestamp': '11/05/2026 14:12:01'}]})
+    assert data['lightning.distance'] == pytest.approx(14.0) and data['lightning.count'] == 2
+    assert isinstance(data['lightning.timestamp'], int)

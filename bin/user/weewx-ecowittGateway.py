@@ -29,9 +29,11 @@ this program.  If not, see https://www.gnu.org/licenses/.
 Version: 2.1.7
 
 Revision History
-    2.1.7 (20 November 2026)
+    2.1.7 (unreleased)
         - WH57 lightning: no error logged on every poll for the '--.-'
           distance a sensor gives before its first strike
+        - [[catchup]] align = true: catchup records saved at WeeWX's
+          archive_interval times, not the device's (off by default)
     2.1.6 (17 November 2026)
         - Ecowitt.net catchup: no crash on 'data': []; solar W/m2 converted
           to lux (radiation was 126.7 times too small)
@@ -232,6 +234,8 @@ DEFAULT_URL_TIMEOUT = 3
 # default grace period after last_good_ts/start_ts after which we accept
 # catchup records
 DEFAULT_CATCHUP_GRACE = 0
+# catchup records keep the device's own times unless [[catchup]] align is on
+DEFAULT_CATCHUP_ALIGN = False
 # default max tries when downloading a catchup file
 DEFAULT_CATCHUP_RETRIES = 3
 # the port the device serves its SD card history files on
@@ -2794,6 +2798,9 @@ class GatewaySource:
         # the port the SD card history files are read from (81 on the device)
         self.catchup_file_port = weeutil.weeutil.to_int(catchup_dict.get('file_port',
                                                                          DEFAULT_SD_FILE_PORT))
+        # combine catchup records into WeeWX's archive_interval records (one
+        # gateway; several gateways' records always are, see align_history())
+        self.catchup_align = weeutil.weeutil.tobool(catchup_dict.get('align', DEFAULT_CATCHUP_ALIGN))
         # Ecowitt.net keys: [[catchup]], or the section itself
         self.api_key = catchup_dict.get('api_key', config.get('api_key')) or None
         self.app_key = catchup_dict.get('app_key', config.get('app_key')) or None
@@ -3130,9 +3137,15 @@ class GatewaySource:
             if count == 0:
                 first = record['dateTime']
                 interval = record.get('interval')
-                if archive_interval and interval and int(interval) * 60 != int(archive_interval):
+                if archive_interval and interval and self.catchup_align:
+                    if int(interval) * 60 > int(archive_interval):
+                        log.warning('%s: Catchup: records from %s are every %s minutes, longer than '
+                                    'archive_interval (%s minutes), so the aligned records have gaps.',
+                                    self.label, where, interval, archive_interval / 60)
+                elif archive_interval and interval and int(interval) * 60 != int(archive_interval):
                     log.warning('%s: Catchup: records from %s are every %s minutes, but archive_interval '
-                                'is %s minutes. They are saved with their own interval.',
+                                'is %s minutes. They are saved with their own interval and time '
+                                '(align = true in [[catchup]] fits them to archive_interval).',
                                 self.label, where, interval, archive_interval / 60)
             count, last = count + 1, record['dateTime']
             yield record
@@ -3678,6 +3691,32 @@ def aggregate_records(records, interval, counters=DEFAULT_COUNTERS):
     return result
 
 
+def align_history(records, interval, start_ts, stop_ts, counters=DEFAULT_COUNTERS):
+    """Catchup records combined into the archive records WeeWX would have made:
+    one per archive interval (end - interval, end], at its end (see
+    aggregate_records()), for the intervals ending after start_ts and no later
+    than stop_ts. The interval in progress at stop_ts is left to the loop
+    packets; a record for it would clash with the one WeeWX makes from them.
+
+    With a device logging every 5 minutes at :02, :07 ... and a 5-minute
+    archive_interval, the 13:17 record (13:12 to 13:17) becomes the 13:20
+    record. Shorter device intervals are combined as in a merged catchup:
+    averages, the maximum gust and rain rate, the last value of the totals
+    WeeWX works rain out from."""
+
+    records = list(records)
+    if not records:
+        return []
+    unit_system = records[0].get('usUnits', DEFAULT_UNIT_SYSTEM)
+    aligned = []
+    for end, rec in sorted(aggregate_records(records, interval, counters).items()):
+        if (start_ts is not None and end <= start_ts) or end > stop_ts:
+            continue
+        rec.update(dateTime=end, usUnits=unit_system, interval=interval // 60)
+        aligned.append(rec)
+    return aligned
+
+
 def merge_history(per_source, priority, interval, start_ts, stop_ts, totals,
                   unit_system=DEFAULT_UNIT_SYSTEM):
     """Archive records for the intervals ending after start_ts, up to stop_ts,
@@ -3728,9 +3767,11 @@ class EcowittCommon:
         """Initialise an EcowittCommon object.
 
         counters: the cumulative fields WeeWX's [[Delta]] reads (see
-        counter_fields()); only used with several gateways."""
+        counter_fields()); used with several gateways, and with one when
+        [[catchup]] align is on."""
 
         label = label if label is not None else type(self).__name__
+        self.counters = tuple(counters or DEFAULT_COUNTERS)
         configs = source_configs(ec_config)
         if len(configs) > 1:
             log.info('%s: %d gateways, in priority order: %s', label, len(configs),
@@ -6596,10 +6637,23 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
         """Generator to return Ecowitt archive records timestamped after since_ts.
 
         The records come from the gateway's catchup source (the device SD card
-        or Ecowitt.net), see GatewaySource.history().
+        or Ecowitt.net), see GatewaySource.history(). They keep the device's
+        own times, or with [[catchup]] align = true become archive_interval
+        records at the times WeeWX uses (see align_history()).
         """
 
-        return self.source.history(since_ts, archive_interval=self.std_archive_interval)
+        records = self.source.history(since_ts, archive_interval=self.std_archive_interval)
+        if not (self.source.catchup_align and self.std_archive_interval):
+            yield from records
+            return
+        interval = self.std_archive_interval
+        aligned = align_history(records, interval, since_ts, time.time(), self.counters)
+        if aligned:
+            log.info('%s: Catchup: aligned to archive_interval: %d %d-minute record(s), %s to %s',
+                     self.source.label, len(aligned), interval // 60,
+                     timestamp_to_string(aligned[0]['dateTime']),
+                     timestamp_to_string(aligned[-1]['dateTime']))
+        yield from aligned
 
     def catchup_factory(self):
         """Return a 'catchup source' object, see GatewaySource.catchup_factory()."""
@@ -11497,8 +11551,17 @@ class DirectEcowittDevice:
         print(f"{'time':<16} {'min':>3} " + ' '.join(f'{f:>12}' for f in fields))
         count, first, last = 0, {}, {}
         SdMapper.unmapped.clear()
+        align = source.catchup_align and self.archive_interval
+        if align:
+            print(f'[[catchup]] align = true: the records are combined into {self.archive_interval // 60}-minute '
+                  f'archive_interval records.')
+            print()
         try:
-            for rec in source.history(since, archive_interval=self.archive_interval):
+            records = source.history(since, archive_interval=self.archive_interval)
+            if align:
+                records = align_history(records, self.archive_interval, since, time.time(),
+                                        self.counters or DEFAULT_COUNTERS)
+            for rec in records:
                 count += 1
                 for f in ('t_rainyear', 'p_rainyear'):
                     if rec.get(f) is not None:

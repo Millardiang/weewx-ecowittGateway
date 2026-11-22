@@ -453,3 +453,81 @@ def test_sd_columns_are_matched_whatever_their_case(egw):
     mapped = egw.HttpMapper(driver_debug=egw.DebugOptions(), quiet=True).map_data(dotted)
     assert mapped['inTemp'] == 21.0 and mapped['feelslike'] == 10.5 and mapped['co2_temp'] == 20.7
     assert mapped['UV'] == 1.0
+
+
+# ------------------------------------------- catchup aligned to archive_interval
+
+def _shift_sd_card(sd_card, minutes):
+    """The fixture's SD card records, logged that many minutes after the archive_interval boundaries."""
+    with open(os.path.join(FIXTURES, 'sd_202611A.csv'), encoding='utf-8') as f:
+        lines = f.read().splitlines()
+    for i, line in enumerate(lines[1:], 1):
+        when = datetime.datetime.strptime(line[:16], '%Y-%m-%d %H:%M') + datetime.timedelta(minutes=minutes)
+        lines[i] = when.strftime('%Y-%m-%d %H:%M') + line[16:]
+    sd_card.files['202611A.csv'] = '\n'.join(lines) + '\n'
+
+
+def _local(text):
+    return int(datetime.datetime.strptime(text, '%Y-%m-%d %H:%M').timestamp())
+
+
+def test_catchup_keeps_the_device_times_by_default(make_driver, sd_station, sd_card):
+    """As in 2.1.6: a device logging at :02, :07 ... gives records at :02, :07 ..."""
+    _shift_sd_card(sd_card, 2)
+    records = list(make_driver(archive_interval=300, **sd_station).genStartupRecords(NOV_2))
+    assert [r['dateTime'] for r in records] == [_local('2026-11-06 10:02'), _local('2026-11-06 10:07'),
+                                               _local('2026-11-06 10:12')]
+
+
+def test_catchup_aligned_to_archive_interval(make_driver, sd_station, sd_card, info_log):
+    """With align = true the 10:02 record (09:57 to 10:02) is saved as the 10:05 record WeeWX would have
+    made, as Johannes's 13:17 record would be at 13:20."""
+    _shift_sd_card(sd_card, 2)
+    station = {**sd_station, 'catchup': {**sd_station['catchup'], 'align': 'true'}}
+    records = list(make_driver(archive_interval=300, **station).genStartupRecords(NOV_2))
+    assert [r['dateTime'] for r in records] == [_local('2026-11-06 10:05'), _local('2026-11-06 10:10'),
+                                               _local('2026-11-06 10:15')]
+    assert [r['outTemp'] for r in records] == [10.5, 10.7, 10.8]
+    assert [r['t_rainyear'] for r in records] == [449.4, 449.8, 450.0]
+    assert all(r['interval'] == 5 and r['usUnits'] == records[0]['usUnits'] for r in records)
+    assert 'aligned to archive_interval: 3 5-minute record(s)' in info_log.text
+    assert 'but archive_interval' not in info_log.text
+
+
+def test_aligned_catchup_combines_shorter_device_intervals(make_driver, sd_station, info_log):
+    """5-minute SD card records, 10-minute archive_interval: 10:00 is the (09:50, 10:00] record, 10:05 and
+    10:10 make the (10:00, 10:10] record."""
+    station = {**sd_station, 'catchup': {**sd_station['catchup'], 'align': 'yes'}}
+    records = list(make_driver(archive_interval=600, **station).genStartupRecords(NOV_2))
+    assert [r['dateTime'] for r in records] == [_local('2026-11-06 10:00'), _local('2026-11-06 10:10')]
+    assert records[1]['outTemp'] == pytest.approx(10.75)            # the average
+    assert records[1]['t_rainyear'] == 450.0                         # the last total
+    assert records[1]['interval'] == 10
+    assert 'but archive_interval' not in info_log.text
+
+
+def test_aligned_catchup_warns_about_a_longer_device_interval(make_driver, sd_station, info_log):
+    station = {**sd_station, 'catchup': {**sd_station['catchup'], 'align': 'true'}}
+    records = list(make_driver(archive_interval=60, **station).genStartupRecords(NOV_2))
+    assert len(records) == 3 and all(r['interval'] == 1 for r in records)
+    assert 'every 5 minutes, longer than archive_interval (1.0 minutes)' in info_log.text
+
+
+def test_align_history_leaves_the_interval_in_progress(egw):
+    """Records after start_ts only, and none for an interval that hasn't ended (WeeWX makes that one
+    from the loop packets)."""
+    t0 = _local('2026-11-22 13:00')
+    recs = [{'dateTime': t0 + m * 60, 'usUnits': 1, 'interval': 1, 'outTemp': float(m)} for m in range(1, 23)]
+    aligned = egw.align_history(recs, 300, start_ts=t0 + 300, stop_ts=t0 + 22 * 60)
+    assert [r['dateTime'] - t0 for r in aligned] == [600, 900, 1200]
+    assert [r['outTemp'] for r in aligned] == [8.0, 13.0, 18.0]
+    assert egw.align_history([], 300, None, t0) == []
+
+
+def test_catchup_dry_run_shows_the_aligned_records(egw, sd_station, sd_card, capsys):
+    _shift_sd_card(sd_card, 2)
+    station = {**sd_station, 'catchup': {**sd_station['catchup'], 'align': 'true'}}
+    direct(egw, station, since='2026-11-06 09:00', catchup_dry_run=True).process_options()
+    out = capsys.readouterr().out
+    assert 'align = true' in out and '3 record(s).' in out
+    assert '2026-11-06 10:05' in out and '2026-11-06 10:15' in out and '2026-11-06 10:02' not in out

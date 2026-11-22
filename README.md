@@ -296,6 +296,7 @@ When WeeWX starts it can fetch missed data from the device's SD card or from Eco
             source = either          # either, device, net or none
             api_key = ...            # Ecowitt.net API key, for net
             app_key = ...            # Ecowitt.net application key, for net
+            align = false            # true: saved at WeeWX's archive_interval times
 
 `either` tries the SD card first, then Ecowitt.net. The SD card's history files are read from port 81
 of the device (`file_port` in `[[catchup]]` changes that, for a device behind port forwarding).
@@ -307,6 +308,20 @@ After a catchup the log says how many records came from where and the time they 
 interval (the SD card's logging interval, or 5 minutes from Ecowitt.net) differs from WeeWX's
 `archive_interval`, a warning says so: the records are saved with their own interval, so set the SD
 card's interval (WS View Plus app) to match.
+
+By default the records keep the time the device logged them at, which needn't be on WeeWX's
+`archive_interval` boundaries: a device logging every 5 minutes at :02, :07 … gives a 13:17 record
+where WeeWX, running, would have saved 13:20. To save them at WeeWX's times:
+
+    [EcowittGateway]
+        [[catchup]]
+            align = true
+
+Each archive interval's records are then combined into one record at the end of the interval, so the
+13:17 record (13:12 to 13:17) is saved as 13:20. Records logged more often than `archive_interval`
+are combined (averages, the highest gust and rain rate, the last rain total); records logged less
+often leave gaps, and a warning says so. The interval in progress when WeeWX starts is left to the
+live data. With several gateways (`[[sources]]`) the records are always aligned.
 
 To see what a catchup would fetch, without saving anything:
 

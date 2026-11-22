@@ -28,8 +28,8 @@ scripted:
 ECOWITT_NO_PROMPT=yes stops the installer asking anything, even at a terminal.
 
 Revision History
-    2.1.7 (20 November 2026)
-        -   no installer changes
+    2.1.7 (unreleased)
+        -   [[catchup]] align = false in the default settings
     2.1.6 (17 November 2026)
         -   no installer changes
     2.1.5 (16 November 2026)
@@ -134,11 +134,14 @@ ecowitt_config = """
 
     # Fetching missed data when WeeWX starts. source: either (the device's SD
     # card, else Ecowitt.net), device, net or none. Ecowitt.net needs the API
-    # and application keys of the account the device uploads to.
+    # and application keys of the account the device uploads to. align = true
+    # saves the records at the archive_interval times WeeWX uses (13:20 rather
+    # than the device's 13:17); false keeps the device's own times.
     [[catchup]]
         source = either
         api_key = ""
         app_key = ""
+        align = false
 
     # Multi-channel sensors (WN31, WN34, WN35, WH41, WH51, WH54, WH55)
     # reported on fixed channels by sensor ID, so re-pairing a sensor does not

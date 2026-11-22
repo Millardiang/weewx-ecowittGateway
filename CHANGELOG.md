@@ -3,7 +3,19 @@
 All notable changes to weewx-ecowittGateway are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [2.1.7] – 20 November 2026
+## [2.1.7] – unreleased
+
+### Added
+
+- `align` in `[[catchup]]`, off by default. Catchup records keep the time the device logged them at,
+  and an Ecowitt device doesn't log on WeeWX's `archive_interval` boundaries: with a 5-minute
+  interval a catchup could save a 13:17 record where WeeWX, running, would have saved 13:20. With
+  `align = true` the records of each archive interval are combined into the record WeeWX would
+  have made, at the end of the interval (13:17 becomes 13:20). A device logging more often than
+  `archive_interval` has its records combined as a merged catchup does (averages, the highest gust
+  and rain rate, the last rain total); one logging less often leaves gaps, and a warning says so.
+  The interval still in progress is left to the loop packets. `--catchup-dry-run` shows the
+  aligned records. Several gateways (`[[sources]]`) were already aligned. (Suggested by Johannes.)
 
 ### Fixed
 

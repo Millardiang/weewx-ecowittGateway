@@ -19,6 +19,14 @@ All notable changes to weewx-ecowittGateway are recorded here. Versions follow
 
 ### Fixed
 
+- `lightningdettime` an hour early for a strike in summer time, read in winter (issue #21, GW2000,
+  Europe/Rome). The HTTP API gives the last strike's time as local time with no UTC offset, and for a
+  strike on 17 August, read in November, the gateway gives it in standard time (19:27:30 for a strike
+  at 20:27:30 CEST). `time.mktime()` read it with the date's own offset (CEST), an hour early. Where
+  the gateway answers the TCP API (port 45000, as GW2000 and GW3000 gateways do), the time now comes
+  from its UTC time, asked at startup and after each strike, not on every poll. Otherwise the HTTP
+  time is read with the UTC offset in effect now. That is right in winter whether the gateway uses its
+  current offset or always standard time; which one it does is still to be seen in summer.
 - With a WH57 lightning sensor that hasn't detected a strike yet, `Error processing distance: Could
   not convert '--.-' to a float` was logged on every poll. Until the first strike the gateway gives
   `--.-` for the distance (and `--/--/---- --:--:--` for the time); the distance is now left

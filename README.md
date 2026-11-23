@@ -483,7 +483,15 @@ sensors: `wh40_batt`, `ws90_sig`, `wn31_ch2_batt`, `wh51_ch3_sig`, and `_volt` f
 uses). The WH68's and WS80's battery voltages (`wh68_volt`, `ws80_volt`) come from the gateway's TCP
 API (port 45000), which GW2000 and GW3000 gateways answer as well as the HTTP API; the HTTP API gives
 only a level (0–5) for them. They are read every 5 minutes; if the TCP API doesn't answer, the log
-says so once and those two fields are left out. Each sensor's received signal strength is in
+says so once and those two fields are left out.
+
+**Last lightning strike time** (`lightningdettime`) comes from the TCP API too, where the gateway
+answers it: the HTTP API gives it as local time with no UTC offset, which isn't the offset in effect
+on the strike's date (a summer strike read in winter is in standard time). The TCP API is asked at
+startup and after each strike. If it doesn't answer, the log says so once and the HTTP API's time is
+read with the UTC offset in effect now.
+
+Each sensor's received signal strength is in
 `<sensor>_rssi` (dBm, eg `wh40_rssi`, `wn31_ch1_rssi`), beside its signal (0–4) in `<sensor>_sig`.
 `weectl device --sensors` shows each sensor's signal, rssi, battery and, where there is one,
 voltage:

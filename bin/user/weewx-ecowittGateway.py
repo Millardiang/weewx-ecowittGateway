@@ -34,6 +34,9 @@ Revision History
           distance a sensor gives before its first strike
         - [[catchup]] align = true: catchup records saved at WeeWX's
           archive_interval times, not the device's (off by default)
+        - lightningdettime from the TCP API's UTC time where the gateway
+          answers it; the HTTP API's local time read with the UTC offset in
+          effect now, not the strike date's (issue #21: an hour early)
     2.1.6 (17 November 2026)
         - Ecowitt.net catchup: no crash on 'data': []; solar W/m2 converted
           to lux (radiation was 126.7 times too small)
@@ -3689,6 +3692,43 @@ def aggregate_records(records, interval, counters=DEFAULT_COUNTERS):
         fields = {f for r in recs for f in r} - {'dateTime', 'usUnits', 'interval'}
         result[end] = {f: _combine(aggregation(f, counters), [r.get(f) for r in recs]) for f in fields}
     return result
+
+
+def device_time_to_ts(dt, now=None):
+    """The timestamp of a time the gateway gives as local time with no UTC
+    offset (the HTTP API's lightning 'timestamp'), read with the UTC offset in
+    effect now rather than the one on that date.
+
+    The gateway's string for a strike in summer time, read in winter, is in
+    standard time (issue #21: 19:27:30 for a strike at 20:27:30 CEST), so
+    time.mktime(), which uses the date's own offset, put it an hour early.
+    Whether the gateway uses its current offset or always standard time can
+    only be told apart in summer; both agree with this in winter. The TCP
+    API's UTC time is used instead where the gateway answers it (see
+    EcowittDevice.fix_lightning_time())."""
+
+    now = time.time() if now is None else now
+    offset = datetime.datetime.fromtimestamp(now).astimezone().utcoffset()
+    return int(calendar.timegm(dt.timetuple()) - offset.total_seconds())
+
+
+def tcp_live_item(payload, code):
+    """The raw bytes of one item of a TCP API live data payload (command
+    0x27), or None if it isn't there or the payload can't be walked to it."""
+
+    items, i = EcowittTcpDevice.live_items, 0
+    while i < len(payload):
+        item = payload[i]
+        if item not in items:
+            return None
+        length = items[item][0]
+        if length is None:  # 0x71: a length byte, then that many bytes
+            length = 1 + (payload[i + 1] if i + 1 < len(payload) else 0)
+        if item == code:
+            raw = payload[i + 1:i + 1 + length]
+            return raw if len(raw) == length else None
+        i += 1 + length
+    return None
 
 
 def align_history(records, interval, start_ts, stop_ts, counters=DEFAULT_COUNTERS):
@@ -7974,7 +8014,9 @@ class EcowittHttpParser:
     def process_lightning_array(self, response):
         """lightning (WH57): [{'distance': '14 km', 'date':
         '2024-03-21T20:45:37', 'timestamp': '03/21/2024 20:45:37', 'count':
-        '0', 'battery': '4'}]. 'timestamp' becomes a timestamp. Until the
+        '0', 'battery': '4'}]. 'timestamp' becomes a timestamp (see
+        device_time_to_ts(); EcowittDevice uses the TCP API's instead where it
+        can, see EcowittDevice.fix_lightning_time()). Until the
         sensor detects a strike the gateway gives placeholders ('distance':
         '--.-', 'timestamp': '--/--/---- --:--:--'), which become None."""
         item = self._first(response, 'lightning')
@@ -7996,7 +8038,8 @@ class EcowittHttpParser:
         except (TypeError, ValueError):
             _item['timestamp'] = None
         else:
-            _item['timestamp'] = int(time.mktime(_timestamp_dt.timetuple()))
+            # local time with no UTC offset: see device_time_to_ts()
+            _item['timestamp'] = device_time_to_ts(_timestamp_dt)
         return _item
 
     def process_co2_array(self, response):
@@ -8807,6 +8850,11 @@ class EcowittDevice:
         self._tcp_volts = {}
         self._tcp_next = 0
         self._tcp_failed = False
+        # the last strike's time from the TCP API: (the HTTP API's string for
+        # it, timestamp), see fix_lightning_time()
+        self._lightning = (None, None)
+        self._lightning_tcp_next = 0
+        self._lightning_tcp_failed = False
 
     # sensors whose battery voltage only the TCP API gives (the HTTP API gives
     # a level): {model: volts per unit of the TCP API's battery byte}
@@ -8869,8 +8917,71 @@ class EcowittDevice:
         """
 
         live_data = self.api.get_livedata_info()
-        return self.parser.parse_get_livedata_info(live_data,
-                                                   flatten_data=flatten_data)
+        data = self.parser.parse_get_livedata_info(live_data, flatten_data=flatten_data)
+        self.fix_lightning_time(live_data, data)
+        return data
+
+    def fix_lightning_time(self, live_data, data):
+        """Replace the lightning timestamp parsed from the HTTP API's local
+        time string with the UTC time the TCP API gives (item 0x61), where the
+        gateway answers the TCP API. The string has no UTC offset and isn't in
+        the offset in effect on the strike's date (issue #21; see
+        device_time_to_ts()).
+
+        The TCP API is asked when the string changes (at startup and after a
+        strike), not on every poll. If it doesn't answer, the time read from
+        the string is kept, and the TCP API is tried again after
+        TCP_VOLTAGE_RETRY seconds."""
+
+        try:
+            text = live_data['lightning'][0]['timestamp']
+        except (KeyError, IndexError, TypeError):
+            return
+        lightning = data.get('lightning') if isinstance(data.get('lightning'), dict) else data
+        key = 'timestamp' if lightning is not data else 'lightning.timestamp'
+        http_ts = lightning.get(key)
+        if http_ts is None:
+            return
+        if text != self._lightning[0]:
+            ts = self.tcp_lightning_time(http_ts)
+            if ts is None:
+                if time.time() < self._lightning_tcp_next:
+                    # not asked: try again when the retry time has passed
+                    return
+                ts = http_ts
+            self._lightning = (text, ts)
+        lightning[key] = self._lightning[1]
+
+    def tcp_lightning_time(self, http_ts):
+        """The last strike's UTC timestamp from the TCP API, or None if it
+        doesn't answer or its time isn't http_ts give or take whole quarter
+        hours of UTC offset (a strike between the two requests)."""
+
+        now = time.time()
+        if now < self._lightning_tcp_next:
+            return None
+        try:
+            raw = tcp_live_item(self.tcp_api.call(0x27), 0x61)
+        except (DeviceIOError, OSError) as e:
+            if not self._lightning_tcp_failed:
+                log.info('The TCP API at %s:%d did not answer (%s): the last lightning strike time is '
+                         'read from the HTTP API\'s local time', self.tcp_api.host, self.tcp_api.port, e)
+            self._lightning_tcp_failed = True
+            self._lightning_tcp_next = now + self.TCP_VOLTAGE_RETRY
+            return None
+        self._lightning_tcp_failed = False
+        self._lightning_tcp_next = 0
+        if raw is None or raw == b'\xff\xff\xff\xff':
+            return None
+        ts = int.from_bytes(raw, 'big')
+        diff = ts - http_ts
+        if abs(diff) > 86400 or diff % 900:
+            log.debug('Lightning: the TCP API time %s is not the HTTP API time %s', ts, http_ts)
+            return None
+        if diff:
+            log.debug('Lightning: last strike %s (TCP API, UTC); the HTTP API\'s local time gave %+d minutes',
+                      timestamp_to_string(ts), -diff // 60)
+        return ts
 
     def get_sensors_data(self, connected_only=DEFAULT_ONLY_REGISTERED_SENSORS, flatten_data=True):
         """Return sensor metadata.

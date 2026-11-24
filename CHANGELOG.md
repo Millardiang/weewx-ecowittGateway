@@ -19,6 +19,14 @@ All notable changes to weewx-ecowittGateway are recorded here. Versions follow
 
 ### Fixed
 
+- An early WH40 rain gauge, which sends no battery data, was reported as a low battery
+  (`rainBatteryStatus` 1) over the HTTP API and as 1.6 V, OK, over the TCP API (GW2000A V3.3.3, WH40
+  F214; the gateway's own page says Normal). Over the HTTP API it gives a level of 0 and no voltage
+  in the live rain data; over the TCP API, a fixed 0x10. Both now give no value for `wh40_batt`,
+  `wh40_volt` and `rainBatteryStatus`, and `weectl device --sensors` shows `battery: --`. A WH40
+  that gives a voltage, or a level other than 0, is unchanged. Over the TCP API a later WH40's
+  battery byte is now read in 10 mV units (145 is 1.45 V), not 100 mV, as the GW1000 driver does
+  following Ecowitt.
 - `lightningdettime` an hour early for a strike in summer time, read in winter (issue #21, GW2000,
   Europe/Rome). The HTTP API gives the last strike's time as local time with no UTC offset, and for a
   strike on 17 August, read in November, the gateway gives it in standard time (19:27:30 for a strike

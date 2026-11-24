@@ -305,11 +305,11 @@
 "lines": 8
 },
 "--sensors [null]": {
-"digest": "8849438e0c82525e",
+"digest": "9965ae5489cc57c9",
 "lines": 4
 },
 "--sensors [sparse]": {
-"digest": "30a657c3140dc22e",
+"digest": "8f5ef30f7aba6f02",
 "lines": 4
 },
 "--service-map": {

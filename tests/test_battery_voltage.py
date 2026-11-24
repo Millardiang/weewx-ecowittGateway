@@ -97,3 +97,66 @@ def test_rssi_fields_in_loop_packets(egw, gateways):
     assert packet['wh40_rssi'] == -71 and packet['wh68_rssi'] == -53 and packet['ws90_rssi'] == -62
     assert packet['wh40_sig'] == 4
     assert egw.accumulator_extractors()['wh40_rssi'] == 'last'
+
+
+# ------------------------------------------- an early WH40 sends no battery data
+
+def _early_wh40(http, batt='0', voltage=None):
+    """The WH40 as the gateway gives it: batt in get_sensors_info, voltage (if any) in the live rain data."""
+    for item in http.responses['get_livedata_info']['rain']:
+        if item['id'] == '0x13':
+            item.pop('voltage', None)
+            item['battery'] = batt
+            if voltage is not None:
+                item['voltage'] = voltage
+    for sensor in http.responses['get_sensors_info?page=1']:
+        if sensor['img'] == 'wh40':
+            sensor.update(id='F214', batt=batt)
+
+
+def _packet(egw, http, tcp):
+    source = egw.GatewaySource('gateway', {'ip_address': http.address, 'api': 'http', 'tcp_port': str(tcp.port),
+                                           'max_tries': '1', 'retry_wait': '0',
+                                           'firmware_update_check_interval': '0',
+                                           'catchup': {'source': 'none'}})
+    try:
+        return source.loop_packet(source.collector.get_current_data())
+    finally:
+        source.stop()
+
+
+def test_http_early_wh40_battery_is_unknown(egw, gateways):
+    """GW2000A V3.3.3, WH40 F214: batt "0" and no voltage. It was a low battery (rainBatteryStatus 1);
+    the gateway's own page says Normal."""
+    http, tcp = gateways
+    _early_wh40(http)
+    packet = _packet(egw, http, tcp)
+    assert packet.get('wh40_batt') is None and packet.get('rainBatteryStatus') is None
+    assert packet.get('wh40_volt') is None and packet['wh40_sig'] == 4
+
+
+@pytest.mark.parametrize('batt, voltage, expected', [('0', '1.1', 0), ('4', None, 4), ('5', '1.6', 5)])
+def test_http_wh40_battery_level_kept(egw, gateways, batt, voltage, expected):
+    """A WH40 that gives a voltage, or a level other than 0, keeps its level."""
+    http, tcp = gateways
+    _early_wh40(http, batt, voltage)
+    assert _packet(egw, http, tcp)['wh40_batt'] == expected
+
+
+@pytest.mark.parametrize('byte, volts', [(0x10, None), (0, None), (19, None), (20, 0.2), (145, 1.45), (160, 1.6)])
+def test_tcp_wh40_battery_byte(egw, byte, volts):
+    """As the GW1000 driver decodes it: below 2.0 V in the documented 100 mV units (an early WH40's
+    fixed 0x10) is no data, anything else is in 10 mV units."""
+    assert egw.wh40_battery(byte) == volts
+
+
+@pytest.mark.parametrize('byte, volts', [(0x10, None), (145, 1.45)])
+def test_tcp_wh40_sensor(egw, byte, volts):
+    """weectl device --sensors --api=tcp gave 'battery: 1.6 (1.6V) (OK)' for the early WH40."""
+    from conftest import FakeGw1000
+    dev = egw.EcowittTcpDevice('192.0.2.99')
+    dev.api.call = lambda cmd: FakeGw1000.sensor(3, 0x4000F214, byte, 4)
+    sensors = dev.get_sensors_data()
+    assert sensors['wh40.battery'] == volts and sensors['wh40.signal'] == 4
+    assert sensors.get('rain.0x13.voltage') == volts and sensors.get('wh40.voltage') == volts
+    assert dev.sensors.batt_state_desc('wh40', {'battery': volts}) == (None if volts is None else 'OK')

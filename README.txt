@@ -531,7 +531,9 @@ ws90_volt, wh40_volt). The WS69 sensor array is wh69 (the name the gateway uses)
 WS80's battery voltages (wh68_volt, ws80_volt) come from the gateway's TCP API (port 45000), which
 GW2000 and GW3000 gateways answer as well as the HTTP API; the HTTP API gives only a level (0–5) for
 them. They are read every 5 minutes; if the TCP API doesn't answer, the log says so once and those
-two fields are left out.
+two fields are left out. An early WH40 sends no battery data: the HTTP API gives a level of 0 with
+no voltage for it, the TCP API a fixed 1.6 V, so wh40_batt, wh40_volt and rainBatteryStatus have no
+value and weectl device --sensors shows battery: --.
 
 Last lightning strike time (lightningdettime) comes from the TCP API too, where the gateway answers
 it: the HTTP API gives it as local time with no UTC offset, which isn't the offset in effect on the

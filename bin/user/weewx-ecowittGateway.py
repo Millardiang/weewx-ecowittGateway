@@ -37,6 +37,9 @@ Revision History
         - lightningdettime from the TCP API's UTC time where the gateway
           answers it; the HTTP API's local time read with the UTC offset in
           effect now, not the strike date's (issue #21: an hour early)
+        - early WH40 (no battery data): wh40_batt and rainBatteryStatus no
+          value, not low (HTTP: level 0, no voltage) or 1.6 V (TCP: 0x10);
+          a later WH40's TCP battery byte read in 10 mV units
     2.1.6 (17 November 2026)
         - Ecowitt.net catchup: no crash on 'data': []; solar W/m2 converted
           to lux (radiation was 126.7 times too small)
@@ -2330,6 +2333,22 @@ STATION_COLUMNS = dict(
 # level instead (0-5, 0 or 1 low, 6 on DC power), so the column gets the status
 # worked out from it and the level stays in the driver's field.
 BATTERY_LEVEL_COLUMNS = ('rainBatteryStatus', 'hailBatteryStatus', 'windBatteryStatus')
+
+
+# An early WH40 sends no battery data (Ecowitt, via the GW1000 driver): the TCP
+# API gives a fixed 0x10 for it, the HTTP API a level of 0 with no voltage in
+# the live rain data. Later WH40s give their voltage over the TCP API in 10 mV
+# units, not the documented 100 mV.
+WH40_NO_BATTERY_BYTE = 20      # below this (2.0 V in 100 mV units): no data
+
+
+def wh40_battery(batt):
+    """The WH40's battery voltage from the TCP API's sensor battery byte, or
+    None for an early WH40 that sends no battery data (0x10, 1.6 V in the
+    documented 100 mV units: anything below 2.0 V in them). Later WH40s give
+    10 mV units: 145 is 1.45 V. As the GW1000 driver decodes it."""
+
+    return None if batt < WH40_NO_BATTERY_BYTE else round(batt * 0.01, 2)
 
 
 def battery_status(level):
@@ -8648,6 +8667,9 @@ class EcowittSensors:
         sensor or battery state data is invalid) the value None is returned.
         """
 
+        if sensor_data.get('battery') is None and sensor_data.get('voltage') is None:
+            # no battery data (eg an early WH40, see wh40_battery())
+            return None
         try:
             if model in self.no_low:
                 return "--"
@@ -8850,6 +8872,9 @@ class EcowittDevice:
         self._tcp_volts = {}
         self._tcp_next = 0
         self._tcp_failed = False
+        # whether the last live data gave the WH40's battery voltage (see
+        # get_sensors_data()); None until live data has been read
+        self._wh40_voltage = None
         # the last strike's time from the TCP API: (the HTTP API's string for
         # it, timestamp), see fix_lightning_time()
         self._lightning = (None, None)
@@ -8919,6 +8944,9 @@ class EcowittDevice:
         live_data = self.api.get_livedata_info()
         data = self.parser.parse_get_livedata_info(live_data, flatten_data=flatten_data)
         self.fix_lightning_time(live_data, data)
+        rain = live_data.get('rain') if isinstance(live_data, dict) else None
+        self._wh40_voltage = any(isinstance(item, dict) and item.get('id') == '0x13' and item.get('voltage')
+                                 not in (None, '') for item in rain or ())
         return data
 
     def fix_lightning_time(self, live_data, data):
@@ -9002,6 +9030,11 @@ class EcowittDevice:
             sensor = parsed.get(model)
             if isinstance(sensor, dict) and sensor.get('battery') is not None:
                 sensor['voltage'] = volts
+        # an early WH40 sends no battery data: the gateway gives a level of 0,
+        # and no voltage in the live rain data (see wh40_battery())
+        wh40 = parsed.get('wh40')
+        if isinstance(wh40, dict) and wh40.get('battery') == 0 and not self._wh40_voltage:
+            wh40['battery'] = None
         return flatten(parsed) if flatten_data else parsed
 
     def get_rain_totals(self):
@@ -9510,7 +9543,8 @@ class EcowittTcpDevice:
     detected = True
     live_items = _tcp_live_items()
     # sensors whose battery byte is a voltage (volts per unit); the others report a flag or a 0-6 level
-    battery_volts = {'wh68': 0.02, 'ws80': 0.02, 'ws90': 0.02, 'wn34': 0.02, 'wn35': 0.02, 'wh40': 0.1, 'wh51': 0.1}
+    # (and the WH40's, decoded by wh40_battery())
+    battery_volts = {'wh68': 0.02, 'ws80': 0.02, 'ws90': 0.02, 'wn34': 0.02, 'wn35': 0.02, 'wh51': 0.1}
     # live data voltage fields the HTTP API provides, filled from the sensor battery voltage
     voltage_fields = {'wh40': 'rain.0x13.voltage', 'ws90': 'piezoRain.0x13.voltage', 'wh51': 'ch_soil.{}.voltage',
                       'wn35': 'ch_leaf.{}.voltage'}
@@ -9614,7 +9648,12 @@ class EcowittTcpDevice:
             sensor = {'address': address, 'id': f'{sid:X}', 'enabled': sid != 0xFFFFFFFE, 'rssi': None,
                       'signal': None if unregistered else signal,
                       'battery': None if unregistered or (not self.show_battery and signal == 0) else batt}
-            if sensor['battery'] is not None and model in self.battery_volts:
+            if sensor['battery'] is not None and model == 'wh40':
+                sensor['battery'] = wh40_battery(batt)
+                if sensor['battery'] is not None:
+                    sensor['voltage'] = sensor['battery']
+                    volts[self.voltage_fields[model]] = sensor['voltage']
+            elif sensor['battery'] is not None and model in self.battery_volts:
                 sensor['battery'] = sensor['voltage'] = round(batt * self.battery_volts[model], 2)
                 if model in self.voltage_fields:
                     volts[self.voltage_fields[model].format(channel[2:] if channel else '')] = sensor['voltage']
@@ -11472,9 +11511,10 @@ class DirectEcowittDevice:
                 print()
                 self.device_connection_help()
             else:
+                # live data first: it says whether the WH40 gives a voltage
+                live_data = device.get_live_data(flatten_data=True)
                 sensors_data = device.get_sensors_data(connected_only=False,
                                                        flatten_data=False)
-                live_data = device.get_live_data(flatten_data=True)
                 device.sensors.update_sensor_data(all_sensor_data=sensors_data,
                                                   live_data=live_data)
                 sensors_metadata = device.sensors.data

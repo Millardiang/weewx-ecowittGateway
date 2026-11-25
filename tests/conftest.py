@@ -37,6 +37,31 @@ import weewx  # noqa: E402
 egw_module = importlib.import_module('user.weewx-ecowittGateway')
 
 
+# A connection to a port nothing listens on, on this host, can very rarely
+# connect to itself: the kernel picks the same port as its source (TCP
+# simultaneous open), and the 'device' answers with the request it was sent.
+# The tests' devices are at 127.0.0.1 with the TCP API on its default port,
+# 45000, inside Linux's source port range, and each live data read asks it for
+# the lightning time, so a full run met this now and then. Such a connection is
+# refused here, as it would be with no self-connect.
+_create_connection = socket.create_connection
+
+
+def _no_self_connect(address, *args, **kwargs):
+    sock = _create_connection(address, *args, **kwargs)
+    try:
+        if sock.getsockname()[:2] == sock.getpeername()[:2]:
+            sock.close()
+            raise ConnectionRefusedError(f'connection to {address} connected to itself')
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+socket.create_connection = _no_self_connect
+
+
 def load_dump(name):
     with open(os.path.join(FIXTURES, name), encoding='utf-8') as f:
         return json.load(f)

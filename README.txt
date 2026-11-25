@@ -1,7 +1,7 @@
 WEEWX-ECOWITTGATEWAY
 ====================
 
-Version: 2.1.6 · WeeWX driver and service for Ecowitt gateways and consoles (local HTTP API, or the
+Version: 2.1.7 · WeeWX driver and service for Ecowitt gateways and consoles (local HTTP API, or the
 TCP API for the GW1000)
 
 weewx-ecowittGateway is built on Gary Roderick's Ecowitt local HTTP API driver (ecowitt_http.py
@@ -77,18 +77,18 @@ Installation as a WeeWX driver
 
     For WeeWX package installs:
 
-        weectl extension install weewx-ecowittGateway-2.1.6.zip
+        weectl extension install weewx-ecowittGateway-2.1.7.zip
 
     For WeeWX pip installs the Python virtual environment must be activated before the extension is
     installed:
 
-        source ~/weewx-venv/bin/activate weectl extension install weewx-ecowittGateway-2.1.6.zip
+        source ~/weewx-venv/bin/activate weectl extension install weewx-ecowittGateway-2.1.7.zip
 
     For WeeWX installs from git the Python virtual environment must be activated before the
     extension is installed:
 
         source ~/weewx-venv/bin/activate python3 ~/weewx/src/weectl.py extension install
-        weewx-ecowittGateway-2.1.6.zip
+        weewx-ecowittGateway-2.1.7.zip
 
     The installer asks for the device IP address (and checks it), whether to use the device as the
     station driver or as a service, which rain gauge WeeWX rain comes from, and the optional
@@ -343,7 +343,7 @@ When WeeWX starts it can fetch missed data from the device's SD card or from Eco
 
     [EcowittGateway] [[catchup]] source = either          # either, device, net or none api_key =
     ...            # Ecowitt.net API key, for net app_key = ...            # Ecowitt.net application
-    key, for net
+    key, for net align = false            # true: saved at WeeWX's archive_interval times
 
 either tries the SD card first, then Ecowitt.net. The SD card's history files are read from port 81
 of the device (file_port in [[catchup]] changes that, for a device behind port forwarding).
@@ -355,6 +355,18 @@ After a catchup the log says how many records came from where and the time they 
 interval (the SD card's logging interval, or 5 minutes from Ecowitt.net) differs from WeeWX's
 archive_interval, a warning says so: the records are saved with their own interval, so set the SD
 card's interval (WS View Plus app) to match.
+
+By default the records keep the time the device logged them at, which needn't be on WeeWX's
+archive_interval boundaries: a device logging every 5 minutes at :02, :07 … gives a 13:17 record
+where WeeWX, running, would have saved 13:20. To save them at WeeWX's times:
+
+    [EcowittGateway] [[catchup]] align = true
+
+Each archive interval's records are then combined into one record at the end of the interval, so the
+13:17 record (13:12 to 13:17) is saved as 13:20. Records logged more often than archive_interval are
+combined (averages, the highest gust and rain rate, the last rain total); records logged less often
+leave gaps, and a warning says so. The interval in progress when WeeWX starts is left to the live
+data. With several gateways ([[sources]]) the records are always aligned.
 
 To see what a catchup would fetch, without saving anything:
 
@@ -519,9 +531,19 @@ ws90_volt, wh40_volt). The WS69 sensor array is wh69 (the name the gateway uses)
 WS80's battery voltages (wh68_volt, ws80_volt) come from the gateway's TCP API (port 45000), which
 GW2000 and GW3000 gateways answer as well as the HTTP API; the HTTP API gives only a level (0–5) for
 them. They are read every 5 minutes; if the TCP API doesn't answer, the log says so once and those
-two fields are left out. Each sensor's received signal strength is in <sensor>_rssi (dBm, eg
-wh40_rssi, wn31_ch1_rssi), beside its signal (0–4) in <sensor>_sig. weectl device --sensors shows
-each sensor's signal, rssi, battery and, where there is one, voltage:
+two fields are left out. An early WH40 sends no battery data: the HTTP API gives a level of 0 with
+no voltage for it, the TCP API a fixed 1.6 V, so wh40_batt, wh40_volt and rainBatteryStatus have no
+value and weectl device --sensors shows battery: --.
+
+Last lightning strike time (lightningdettime) comes from the TCP API too, where the gateway answers
+it: the HTTP API gives it as local time with no UTC offset, which isn't the offset in effect on the
+strike's date (a summer strike read in winter is in standard time). The TCP API is asked at startup
+and after each strike. If it doesn't answer, the log says so once and the HTTP API's time is read
+with the UTC offset in effect now.
+
+Each sensor's received signal strength is in <sensor>_rssi (dBm, eg wh40_rssi, wn31_ch1_rssi),
+beside its signal (0–4) in <sensor>_sig. weectl device --sensors shows each sensor's signal, rssi,
+battery and, where there is one, voltage:
 
     WH40       sensor ID: C79F           signal: 4 rssi: -56 battery: 5 (1.6V) (OK)
 
@@ -711,7 +733,7 @@ Every installer question can be answered with an ECOWITT_* environment variable,
 be scripted (for example in a Vagrant or Ansible provisioner):
 
     sudo ECOWITT_NO_PROMPT=yes ECOWITT_IP_ADDRESS=192.168.1.100 ECOWITT_MODE=driver \ weectl
-    extension install --yes weewx-ecowittGateway-2.1.6.zip
+    extension install --yes weewx-ecowittGateway-2.1.7.zip
 
 Questions without a variable take their default (the existing setting where there is one), and the
 installer prints each answer and where it came from. A variable with a value the installer cannot

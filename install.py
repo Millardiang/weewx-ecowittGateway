@@ -13,7 +13,7 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 Built on the installer for Gary Roderick's Ecowitt Local HTTP API driver
 (ecowitt_http.py 0.1.0a28).
 
-Version: 2.1.6
+Version: 2.1.7
 
 The installer asks for the gateway settings and writes them to weewx.conf,
 with the [EcowittGateway] section placed directly after [Station]. Without a
@@ -28,6 +28,8 @@ scripted:
 ECOWITT_NO_PROMPT=yes stops the installer asking anything, even at a terminal.
 
 Revision History
+    2.1.7 (unreleased)
+        -   [[catchup]] align = false in the default settings
     2.1.6 (17 November 2026)
         -   no installer changes
     2.1.5 (16 November 2026)
@@ -76,7 +78,7 @@ import weewx
 
 
 REQUIRED_WEEWX_VERSION = "5.0.0"
-DRIVER_VERSION = "2.1.6"
+DRIVER_VERSION = "2.1.7"
 SECTION = 'EcowittGateway'
 # ecowitt_http.py's section and service, moved to the names above
 LEGACY_SECTION = 'EcowittHttp'
@@ -132,11 +134,14 @@ ecowitt_config = """
 
     # Fetching missed data when WeeWX starts. source: either (the device's SD
     # card, else Ecowitt.net), device, net or none. Ecowitt.net needs the API
-    # and application keys of the account the device uploads to.
+    # and application keys of the account the device uploads to. align = true
+    # saves the records at the archive_interval times WeeWX uses (13:20 rather
+    # than the device's 13:17); false keeps the device's own times.
     [[catchup]]
         source = either
         api_key = ""
         app_key = ""
+        align = false
 
     # Multi-channel sensors (WN31, WN34, WN35, WH41, WH51, WH54, WH55)
     # reported on fixed channels by sensor ID, so re-pairing a sensor does not

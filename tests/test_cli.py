@@ -258,3 +258,16 @@ def test_weectl_live_data_uses_the_standard_column_names(egw, http_config, capsy
 def test_live_data_shows_rssi(egw, http_config, capsys):
     out = run(egw, http_config, capsys, '--live-data')
     assert 'wh40_rssi: -71' in out and 'ws90_rssi: -62' in out
+
+
+def test_sensors_early_wh40(egw, http_config, gateway, capsys):
+    """An early WH40 sends no battery data (batt "0", no voltage): 'battery: --', not 'battery: 0 (low)'."""
+    for item in gateway.responses['get_livedata_info']['rain']:
+        if item['id'] == '0x13':
+            item['battery'] = '0'
+    for sensor in gateway.responses['get_sensors_info?page=1']:
+        if sensor['img'] == 'wh40':
+            sensor['batt'] = '0'
+    out = run(egw, http_config, capsys, '--sensors')
+    wh40 = next(line for line in out.splitlines() if line.startswith('WH40 '))
+    assert wh40.rstrip().endswith('battery: --') and 'Traceback' not in out

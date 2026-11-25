@@ -26,9 +26,20 @@ PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 You should have received a copy of the GNU General Public License along with
 this program.  If not, see https://www.gnu.org/licenses/.
 
-Version: 2.1.6
+Version: 2.1.7
 
 Revision History
+    2.1.7 (unreleased)
+        - WH57 lightning: no error logged on every poll for the '--.-'
+          distance a sensor gives before its first strike
+        - [[catchup]] align = true: catchup records saved at WeeWX's
+          archive_interval times, not the device's (off by default)
+        - lightningdettime from the TCP API's UTC time where the gateway
+          answers it; the HTTP API's local time read with the UTC offset in
+          effect now, not the strike date's (issue #21: an hour early)
+        - early WH40 (no battery data): wh40_batt and rainBatteryStatus no
+          value, not low (HTTP: level 0, no voltage) or 1.6 V (TCP: 0x10);
+          a later WH40's TCP battery byte read in 10 mV units
     2.1.6 (17 November 2026)
         - Ecowitt.net catchup: no crash on 'data': []; solar W/m2 converted
           to lux (radiation was 126.7 times too small)
@@ -197,7 +208,7 @@ log = logging.getLogger(__name__)
 
 
 DRIVER_NAME = 'EcowittGateway'
-DRIVER_VERSION = '2.1.6'
+DRIVER_VERSION = '2.1.7'
 # config section used by ecowitt_http.py; read if there is no [EcowittGateway]
 LEGACY_DRIVER_NAME = 'EcowittHttp'
 # this module, as WeeWX loads it
@@ -229,6 +240,8 @@ DEFAULT_URL_TIMEOUT = 3
 # default grace period after last_good_ts/start_ts after which we accept
 # catchup records
 DEFAULT_CATCHUP_GRACE = 0
+# catchup records keep the device's own times unless [[catchup]] align is on
+DEFAULT_CATCHUP_ALIGN = False
 # default max tries when downloading a catchup file
 DEFAULT_CATCHUP_RETRIES = 3
 # the port the device serves its SD card history files on
@@ -2322,6 +2335,22 @@ STATION_COLUMNS = dict(
 BATTERY_LEVEL_COLUMNS = ('rainBatteryStatus', 'hailBatteryStatus', 'windBatteryStatus')
 
 
+# An early WH40 sends no battery data (Ecowitt, via the GW1000 driver): the TCP
+# API gives a fixed 0x10 for it, the HTTP API a level of 0 with no voltage in
+# the live rain data. Later WH40s give their voltage over the TCP API in 10 mV
+# units, not the documented 100 mV.
+WH40_NO_BATTERY_BYTE = 20      # below this (2.0 V in 100 mV units): no data
+
+
+def wh40_battery(batt):
+    """The WH40's battery voltage from the TCP API's sensor battery byte, or
+    None for an early WH40 that sends no battery data (0x10, 1.6 V in the
+    documented 100 mV units: anything below 2.0 V in them). Later WH40s give
+    10 mV units: 145 is 1.45 V. As the GW1000 driver decodes it."""
+
+    return None if batt < WH40_NO_BATTERY_BYTE else round(batt * 0.01, 2)
+
+
 def battery_status(level):
     """WeeWX's battery status, 0 (OK) or 1 (low), for an Ecowitt battery level;
     None if the level isn't one."""
@@ -2791,6 +2820,9 @@ class GatewaySource:
         # the port the SD card history files are read from (81 on the device)
         self.catchup_file_port = weeutil.weeutil.to_int(catchup_dict.get('file_port',
                                                                          DEFAULT_SD_FILE_PORT))
+        # combine catchup records into WeeWX's archive_interval records (one
+        # gateway; several gateways' records always are, see align_history())
+        self.catchup_align = weeutil.weeutil.tobool(catchup_dict.get('align', DEFAULT_CATCHUP_ALIGN))
         # Ecowitt.net keys: [[catchup]], or the section itself
         self.api_key = catchup_dict.get('api_key', config.get('api_key')) or None
         self.app_key = catchup_dict.get('app_key', config.get('app_key')) or None
@@ -3127,9 +3159,15 @@ class GatewaySource:
             if count == 0:
                 first = record['dateTime']
                 interval = record.get('interval')
-                if archive_interval and interval and int(interval) * 60 != int(archive_interval):
+                if archive_interval and interval and self.catchup_align:
+                    if int(interval) * 60 > int(archive_interval):
+                        log.warning('%s: Catchup: records from %s are every %s minutes, longer than '
+                                    'archive_interval (%s minutes), so the aligned records have gaps.',
+                                    self.label, where, interval, archive_interval / 60)
+                elif archive_interval and interval and int(interval) * 60 != int(archive_interval):
                     log.warning('%s: Catchup: records from %s are every %s minutes, but archive_interval '
-                                'is %s minutes. They are saved with their own interval.',
+                                'is %s minutes. They are saved with their own interval and time '
+                                '(align = true in [[catchup]] fits them to archive_interval).',
                                 self.label, where, interval, archive_interval / 60)
             count, last = count + 1, record['dateTime']
             yield record
@@ -3675,6 +3713,69 @@ def aggregate_records(records, interval, counters=DEFAULT_COUNTERS):
     return result
 
 
+def device_time_to_ts(dt, now=None):
+    """The timestamp of a time the gateway gives as local time with no UTC
+    offset (the HTTP API's lightning 'timestamp'), read with the UTC offset in
+    effect now rather than the one on that date.
+
+    The gateway's string for a strike in summer time, read in winter, is in
+    standard time (issue #21: 19:27:30 for a strike at 20:27:30 CEST), so
+    time.mktime(), which uses the date's own offset, put it an hour early.
+    Whether the gateway uses its current offset or always standard time can
+    only be told apart in summer; both agree with this in winter. The TCP
+    API's UTC time is used instead where the gateway answers it (see
+    EcowittDevice.fix_lightning_time())."""
+
+    now = time.time() if now is None else now
+    offset = datetime.datetime.fromtimestamp(now).astimezone().utcoffset()
+    return int(calendar.timegm(dt.timetuple()) - offset.total_seconds())
+
+
+def tcp_live_item(payload, code):
+    """The raw bytes of one item of a TCP API live data payload (command
+    0x27), or None if it isn't there or the payload can't be walked to it."""
+
+    items, i = EcowittTcpDevice.live_items, 0
+    while i < len(payload):
+        item = payload[i]
+        if item not in items:
+            return None
+        length = items[item][0]
+        if length is None:  # 0x71: a length byte, then that many bytes
+            length = 1 + (payload[i + 1] if i + 1 < len(payload) else 0)
+        if item == code:
+            raw = payload[i + 1:i + 1 + length]
+            return raw if len(raw) == length else None
+        i += 1 + length
+    return None
+
+
+def align_history(records, interval, start_ts, stop_ts, counters=DEFAULT_COUNTERS):
+    """Catchup records combined into the archive records WeeWX would have made:
+    one per archive interval (end - interval, end], at its end (see
+    aggregate_records()), for the intervals ending after start_ts and no later
+    than stop_ts. The interval in progress at stop_ts is left to the loop
+    packets; a record for it would clash with the one WeeWX makes from them.
+
+    With a device logging every 5 minutes at :02, :07 ... and a 5-minute
+    archive_interval, the 13:17 record (13:12 to 13:17) becomes the 13:20
+    record. Shorter device intervals are combined as in a merged catchup:
+    averages, the maximum gust and rain rate, the last value of the totals
+    WeeWX works rain out from."""
+
+    records = list(records)
+    if not records:
+        return []
+    unit_system = records[0].get('usUnits', DEFAULT_UNIT_SYSTEM)
+    aligned = []
+    for end, rec in sorted(aggregate_records(records, interval, counters).items()):
+        if (start_ts is not None and end <= start_ts) or end > stop_ts:
+            continue
+        rec.update(dateTime=end, usUnits=unit_system, interval=interval // 60)
+        aligned.append(rec)
+    return aligned
+
+
 def merge_history(per_source, priority, interval, start_ts, stop_ts, totals,
                   unit_system=DEFAULT_UNIT_SYSTEM):
     """Archive records for the intervals ending after start_ts, up to stop_ts,
@@ -3725,9 +3826,11 @@ class EcowittCommon:
         """Initialise an EcowittCommon object.
 
         counters: the cumulative fields WeeWX's [[Delta]] reads (see
-        counter_fields()); only used with several gateways."""
+        counter_fields()); used with several gateways, and with one when
+        [[catchup]] align is on."""
 
         label = label if label is not None else type(self).__name__
+        self.counters = tuple(counters or DEFAULT_COUNTERS)
         configs = source_configs(ec_config)
         if len(configs) > 1:
             log.info('%s: %d gateways, in priority order: %s', label, len(configs),
@@ -6593,10 +6696,23 @@ class EcowittHttpDriver(weewx.drivers.AbstractDevice, EcowittCommon):
         """Generator to return Ecowitt archive records timestamped after since_ts.
 
         The records come from the gateway's catchup source (the device SD card
-        or Ecowitt.net), see GatewaySource.history().
+        or Ecowitt.net), see GatewaySource.history(). They keep the device's
+        own times, or with [[catchup]] align = true become archive_interval
+        records at the times WeeWX uses (see align_history()).
         """
 
-        return self.source.history(since_ts, archive_interval=self.std_archive_interval)
+        records = self.source.history(since_ts, archive_interval=self.std_archive_interval)
+        if not (self.source.catchup_align and self.std_archive_interval):
+            yield from records
+            return
+        interval = self.std_archive_interval
+        aligned = align_history(records, interval, since_ts, time.time(), self.counters)
+        if aligned:
+            log.info('%s: Catchup: aligned to archive_interval: %d %d-minute record(s), %s to %s',
+                     self.source.label, len(aligned), interval // 60,
+                     timestamp_to_string(aligned[0]['dateTime']),
+                     timestamp_to_string(aligned[-1]['dateTime']))
+        yield from aligned
 
     def catchup_factory(self):
         """Return a 'catchup source' object, see GatewaySource.catchup_factory()."""
@@ -7917,23 +8033,21 @@ class EcowittHttpParser:
     def process_lightning_array(self, response):
         """lightning (WH57): [{'distance': '14 km', 'date':
         '2024-03-21T20:45:37', 'timestamp': '03/21/2024 20:45:37', 'count':
-        '0', 'battery': '4'}]. 'timestamp' becomes a timestamp."""
+        '0', 'battery': '4'}]. 'timestamp' becomes a timestamp (see
+        device_time_to_ts(); EcowittDevice uses the TCP API's instead where it
+        can, see EcowittDevice.fix_lightning_time()). Until the
+        sensor detects a strike the gateway gives placeholders ('distance':
+        '--.-', 'timestamp': '--/--/---- --:--:--'), which become None."""
         item = self._first(response, 'lightning')
         _item = dict()
         self._set(_item, 'count', item, 'count', int, errors=(TypeError, ValueError))
+        # a distance that can't be read (the '--.-' placeholder) is None, as
+        # for every other reading, without logging an error on each poll
         try:
-            dist_vt = self.parse_obs_value(key='distance', json_object=item, unit_group='group_distance')
-        except KeyError:
-            pass
+            self._add(_item, item, 'distance', 'group_distance')
         except UnitError as e:
             log.error('process_lightning_array: Error processing distance unit: %s', e)
             _item['distance'] = None
-        except ParseError as e:
-            log.error('process_lightning_array: Error processing distance: %s', e)
-            _item['distance'] = None
-        else:
-            _item['distance'] = weewx.units.convert(
-                dist_vt, weewx.units.std_groups[self.unit_system]['group_distance']).value
         if 'date' in item:
             _item['date'] = item['date']
         try:
@@ -7943,7 +8057,8 @@ class EcowittHttpParser:
         except (TypeError, ValueError):
             _item['timestamp'] = None
         else:
-            _item['timestamp'] = int(time.mktime(_timestamp_dt.timetuple()))
+            # local time with no UTC offset: see device_time_to_ts()
+            _item['timestamp'] = device_time_to_ts(_timestamp_dt)
         return _item
 
     def process_co2_array(self, response):
@@ -8552,6 +8667,9 @@ class EcowittSensors:
         sensor or battery state data is invalid) the value None is returned.
         """
 
+        if sensor_data.get('battery') is None and sensor_data.get('voltage') is None:
+            # no battery data (eg an early WH40, see wh40_battery())
+            return None
         try:
             if model in self.no_low:
                 return "--"
@@ -8754,6 +8872,14 @@ class EcowittDevice:
         self._tcp_volts = {}
         self._tcp_next = 0
         self._tcp_failed = False
+        # whether the last live data gave the WH40's battery voltage (see
+        # get_sensors_data()); None until live data has been read
+        self._wh40_voltage = None
+        # the last strike's time from the TCP API: (the HTTP API's string for
+        # it, timestamp), see fix_lightning_time()
+        self._lightning = (None, None)
+        self._lightning_tcp_next = 0
+        self._lightning_tcp_failed = False
 
     # sensors whose battery voltage only the TCP API gives (the HTTP API gives
     # a level): {model: volts per unit of the TCP API's battery byte}
@@ -8816,8 +8942,74 @@ class EcowittDevice:
         """
 
         live_data = self.api.get_livedata_info()
-        return self.parser.parse_get_livedata_info(live_data,
-                                                   flatten_data=flatten_data)
+        data = self.parser.parse_get_livedata_info(live_data, flatten_data=flatten_data)
+        self.fix_lightning_time(live_data, data)
+        rain = live_data.get('rain') if isinstance(live_data, dict) else None
+        self._wh40_voltage = any(isinstance(item, dict) and item.get('id') == '0x13' and item.get('voltage')
+                                 not in (None, '') for item in rain or ())
+        return data
+
+    def fix_lightning_time(self, live_data, data):
+        """Replace the lightning timestamp parsed from the HTTP API's local
+        time string with the UTC time the TCP API gives (item 0x61), where the
+        gateway answers the TCP API. The string has no UTC offset and isn't in
+        the offset in effect on the strike's date (issue #21; see
+        device_time_to_ts()).
+
+        The TCP API is asked when the string changes (at startup and after a
+        strike), not on every poll. If it doesn't answer, the time read from
+        the string is kept, and the TCP API is tried again after
+        TCP_VOLTAGE_RETRY seconds."""
+
+        try:
+            text = live_data['lightning'][0]['timestamp']
+        except (KeyError, IndexError, TypeError):
+            return
+        lightning = data.get('lightning') if isinstance(data.get('lightning'), dict) else data
+        key = 'timestamp' if lightning is not data else 'lightning.timestamp'
+        http_ts = lightning.get(key)
+        if http_ts is None:
+            return
+        if text != self._lightning[0]:
+            ts = self.tcp_lightning_time(http_ts)
+            if ts is None:
+                if time.time() < self._lightning_tcp_next:
+                    # not asked: try again when the retry time has passed
+                    return
+                ts = http_ts
+            self._lightning = (text, ts)
+        lightning[key] = self._lightning[1]
+
+    def tcp_lightning_time(self, http_ts):
+        """The last strike's UTC timestamp from the TCP API, or None if it
+        doesn't answer or its time isn't http_ts give or take whole quarter
+        hours of UTC offset (a strike between the two requests)."""
+
+        now = time.time()
+        if now < self._lightning_tcp_next:
+            return None
+        try:
+            raw = tcp_live_item(self.tcp_api.call(0x27), 0x61)
+        except (DeviceIOError, OSError) as e:
+            if not self._lightning_tcp_failed:
+                log.info('The TCP API at %s:%d did not answer (%s): the last lightning strike time is '
+                         'read from the HTTP API\'s local time', self.tcp_api.host, self.tcp_api.port, e)
+            self._lightning_tcp_failed = True
+            self._lightning_tcp_next = now + self.TCP_VOLTAGE_RETRY
+            return None
+        self._lightning_tcp_failed = False
+        self._lightning_tcp_next = 0
+        if raw is None or raw == b'\xff\xff\xff\xff':
+            return None
+        ts = int.from_bytes(raw, 'big')
+        diff = ts - http_ts
+        if abs(diff) > 86400 or diff % 900:
+            log.debug('Lightning: the TCP API time %s is not the HTTP API time %s', ts, http_ts)
+            return None
+        if diff:
+            log.debug('Lightning: last strike %s (TCP API, UTC); the HTTP API\'s local time gave %+d minutes',
+                      timestamp_to_string(ts), -diff // 60)
+        return ts
 
     def get_sensors_data(self, connected_only=DEFAULT_ONLY_REGISTERED_SENSORS, flatten_data=True):
         """Return sensor metadata.
@@ -8838,6 +9030,11 @@ class EcowittDevice:
             sensor = parsed.get(model)
             if isinstance(sensor, dict) and sensor.get('battery') is not None:
                 sensor['voltage'] = volts
+        # an early WH40 sends no battery data: the gateway gives a level of 0,
+        # and no voltage in the live rain data (see wh40_battery())
+        wh40 = parsed.get('wh40')
+        if isinstance(wh40, dict) and wh40.get('battery') == 0 and not self._wh40_voltage:
+            wh40['battery'] = None
         return flatten(parsed) if flatten_data else parsed
 
     def get_rain_totals(self):
@@ -9346,7 +9543,8 @@ class EcowittTcpDevice:
     detected = True
     live_items = _tcp_live_items()
     # sensors whose battery byte is a voltage (volts per unit); the others report a flag or a 0-6 level
-    battery_volts = {'wh68': 0.02, 'ws80': 0.02, 'ws90': 0.02, 'wn34': 0.02, 'wn35': 0.02, 'wh40': 0.1, 'wh51': 0.1}
+    # (and the WH40's, decoded by wh40_battery())
+    battery_volts = {'wh68': 0.02, 'ws80': 0.02, 'ws90': 0.02, 'wn34': 0.02, 'wn35': 0.02, 'wh51': 0.1}
     # live data voltage fields the HTTP API provides, filled from the sensor battery voltage
     voltage_fields = {'wh40': 'rain.0x13.voltage', 'ws90': 'piezoRain.0x13.voltage', 'wh51': 'ch_soil.{}.voltage',
                       'wn35': 'ch_leaf.{}.voltage'}
@@ -9450,7 +9648,12 @@ class EcowittTcpDevice:
             sensor = {'address': address, 'id': f'{sid:X}', 'enabled': sid != 0xFFFFFFFE, 'rssi': None,
                       'signal': None if unregistered else signal,
                       'battery': None if unregistered or (not self.show_battery and signal == 0) else batt}
-            if sensor['battery'] is not None and model in self.battery_volts:
+            if sensor['battery'] is not None and model == 'wh40':
+                sensor['battery'] = wh40_battery(batt)
+                if sensor['battery'] is not None:
+                    sensor['voltage'] = sensor['battery']
+                    volts[self.voltage_fields[model]] = sensor['voltage']
+            elif sensor['battery'] is not None and model in self.battery_volts:
                 sensor['battery'] = sensor['voltage'] = round(batt * self.battery_volts[model], 2)
                 if model in self.voltage_fields:
                     volts[self.voltage_fields[model].format(channel[2:] if channel else '')] = sensor['voltage']
@@ -11308,9 +11511,10 @@ class DirectEcowittDevice:
                 print()
                 self.device_connection_help()
             else:
+                # live data first: it says whether the WH40 gives a voltage
+                live_data = device.get_live_data(flatten_data=True)
                 sensors_data = device.get_sensors_data(connected_only=False,
                                                        flatten_data=False)
-                live_data = device.get_live_data(flatten_data=True)
                 device.sensors.update_sensor_data(all_sensor_data=sensors_data,
                                                   live_data=live_data)
                 sensors_metadata = device.sensors.data
@@ -11498,8 +11702,17 @@ class DirectEcowittDevice:
         print(f"{'time':<16} {'min':>3} " + ' '.join(f'{f:>12}' for f in fields))
         count, first, last = 0, {}, {}
         SdMapper.unmapped.clear()
+        align = source.catchup_align and self.archive_interval
+        if align:
+            print(f'[[catchup]] align = true: the records are combined into {self.archive_interval // 60}-minute '
+                  f'archive_interval records.')
+            print()
         try:
-            for rec in source.history(since, archive_interval=self.archive_interval):
+            records = source.history(since, archive_interval=self.archive_interval)
+            if align:
+                records = align_history(records, self.archive_interval, since, time.time(),
+                                        self.counters or DEFAULT_COUNTERS)
+            for rec in records:
                 count += 1
                 for f in ('t_rainyear', 'p_rainyear'):
                     if rec.get(f) is not None:
